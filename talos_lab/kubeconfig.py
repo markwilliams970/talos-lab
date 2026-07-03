@@ -113,6 +113,33 @@ def wait_for_nodes_ready(
     raise ClusterNotReadyError(expected_count, timeout_seconds)
 
 
+def get_node_statuses(kubeconfig_path: Path, timeout_seconds: int = 10) -> list[dict] | None:
+    """Single-shot check for `talos-lab status` -- unlike wait_for_nodes_ready,
+    this never polls/blocks. Returns None (not an exception) if the API
+    server isn't reachable at all right now (VMs stopped, still booting,
+    kubeconfig not written yet, ...) since `status` must degrade
+    gracefully rather than fail outright at any bootstrap stage.
+    """
+    if not kubeconfig_path.exists():
+        return None
+    try:
+        result = subprocess.run(
+            ["kubectl", "--kubeconfig", str(kubeconfig_path), "get", "nodes", "-o", "json"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    if result.returncode != 0:
+        return None
+    try:
+        nodes = json.loads(result.stdout)["items"]
+    except (json.JSONDecodeError, KeyError):
+        return None
+    return [{"name": n["metadata"]["name"], "ready": _node_is_ready(n)} for n in nodes]
+
+
 def label_worker_nodes(kubeconfig_path: Path) -> None:
     """Talos only auto-labels control-plane nodes with
     node-role.kubernetes.io/control-plane -- workers get no role label at

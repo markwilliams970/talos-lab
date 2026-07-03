@@ -9,6 +9,7 @@ create after a partial failure resumes instead of restarting.
 
 from __future__ import annotations
 
+import subprocess
 from datetime import datetime, timezone
 
 from rich.console import Console
@@ -43,6 +44,7 @@ def create_lab(
     cp_profile_name: str | None = None,
     worker_profile_name: str | None = None,
     single_node: bool = False,
+    assume_yes: bool = False,
 ) -> None:
     paths.ensure_root_dirs()
 
@@ -130,6 +132,27 @@ def create_lab(
     lab_state = state.load_lab_state(name)
 
     if not lab_state["tofu_state_done"]:
+        # Same reasoning as start_lab's check: this is a laptop with
+        # finite RAM, and `create` is the OTHER place (besides `start`)
+        # that actually boots VMs (tofu apply sets running = true). Check
+        # right here, not earlier in the function, so it only fires when
+        # we're actually about to provision -- a resumed create that's
+        # already past this stage shouldn't re-prompt.
+        if not assume_yes:
+            already_running = _labs_with_running_vms(exclude=name)
+            if already_running:
+                console.print(
+                    f"[yellow]warning:[/yellow] lab(s) already running: {', '.join(already_running)}"
+                )
+                console.print("creating another lab increases memory pressure. Current host memory:")
+                free_output = subprocess.run(["free", "-h"], capture_output=True, text=True)
+                console.print(free_output.stdout)
+                if not Confirm.ask(f"Provision '{name}' anyway?", default=False):
+                    console.print(
+                        "aborted -- VMs not provisioned. Re-run `talos-lab create` to resume."
+                    )
+                    return
+
         console.print(f"[bold]{name}[/bold]: provisioning VMs + network via OpenTofu...")
         talos_image = images.ensure_image(talos_version)
         template_context = {
@@ -256,6 +279,97 @@ def list_labs() -> None:
     console.print(table)
 
 
+BOOTSTRAP_STAGES = (
+    ("tofu_state_done", "VMs provisioned (OpenTofu)"),
+    ("config_applied", "Talos config applied"),
+    ("talos_bootstrapped", "Cluster bootstrapped"),
+    ("kubeconfig_ready", "Kubeconfig retrieved + nodes Ready"),
+    ("addons_installed", "Addons installed"),
+)
+
+
+def show_status(name: str) -> None:
+    """Reports VM status, bootstrap stage, and live cluster readiness for
+    a lab -- unlike every other command here, this must work (and degrade
+    gracefully, never raise) at ANY bootstrap stage, including before
+    anything has been provisioned at all. Partial/broken states are
+    exactly what this command exists to inspect.
+    """
+    if not state.lab_exists(name):
+        raise LabNotFoundError(name)
+
+    meta = state.get_lab_meta(name)
+    lab_state = state.load_lab_state(name)
+
+    topology = "single-node" if meta.get("single_node") else f"1 control-plane + {meta['worker_count']} worker(s)"
+    console.print(
+        f"[bold]{name}[/bold]  talos={meta.get('talos_version', 'unknown')}  "
+        f"topology={topology}  network={meta.get('network_name', '?')}"
+    )
+
+    console.print("\n[bold]Bootstrap stage:[/bold]")
+    for flag, label in BOOTSTRAP_STAGES:
+        mark = "[green]done   [/green]" if lab_state[flag] else "[yellow]pending[/yellow]"
+        console.print(f"  {mark}  {label}")
+
+    console.print("\n[bold]VMs:[/bold]")
+    domains = vms.domain_names(name, meta["worker_count"])
+    ips = [lab_state.get("control_plane_ip"), *lab_state.get("worker_ips", [])]
+
+    vm_table = Table()
+    vm_table.add_column("domain")
+    vm_table.add_column("role")
+    vm_table.add_column("virsh state")
+    vm_table.add_column("ip")
+    for i, domain in enumerate(domains):
+        role = "control-plane" if i == 0 else "worker"
+        virsh_state = vms.domain_state_or_none(domain) or "not created"
+        ip = ips[i] if i < len(ips) and ips[i] else "-"
+        vm_table.add_row(domain, role, virsh_state, ip)
+    console.print(vm_table)
+
+    console.print("[bold]Cluster:[/bold]")
+    if not lab_state["kubeconfig_ready"]:
+        console.print("  kubeconfig not yet retrieved")
+    else:
+        nodes = kubeconfig.get_node_statuses(paths.lab_kubeconfig_file(name))
+        if nodes is None:
+            console.print("  [yellow]unreachable[/yellow] (VMs may be stopped, or API server not responding)")
+        elif not nodes:
+            console.print("  no nodes reported")
+        else:
+            for node in nodes:
+                status_text = "[green]Ready[/green]" if node["ready"] else "[yellow]NotReady[/yellow]"
+                console.print(f"  {node['name']}: {status_text}")
+
+    context = kubeconfig.context_name(name)
+    active_marker = " (active)" if kubeconfig.current_context() == context else ""
+    console.print(f"\nkube context: {context}{active_marker}")
+
+
+def show_status_all() -> None:
+    """Same report as show_status(), once per registered lab. Each lab is
+    independent -- an unexpected failure reporting on one lab doesn't stop
+    the rest from being shown (show_status itself already degrades
+    gracefully for normal partial-bootstrap states; this only guards
+    against something truly unexpected, e.g. a corrupted state.json).
+    """
+    lab_names = list(state.load_registry()["labs"].keys())
+
+    if not lab_names:
+        console.print("no labs registered")
+        return
+
+    for i, lab_name in enumerate(lab_names):
+        if i > 0:
+            console.rule()
+        try:
+            show_status(lab_name)
+        except TalosLabError as e:
+            console.print(f"[bold]{lab_name}[/bold]")
+            console.print(f"[red]error:[/red] {e}")
+
+
 def use_lab(name: str) -> None:
     if not state.lab_exists(name):
         raise LabNotFoundError(name)
@@ -271,8 +385,40 @@ def _require_provisioned(name: str) -> dict:
     return state.get_lab_meta(name)
 
 
-def start_lab(name: str) -> None:
+def _labs_with_running_vms(exclude: str) -> list[str]:
+    running = []
+    for lab_name, meta in state.load_registry()["labs"].items():
+        if lab_name == exclude:
+            continue
+        domains = vms.domain_names(lab_name, meta.get("worker_count", 0))
+        if any(vms.domain_state_or_none(d) == "running" for d in domains):
+            running.append(lab_name)
+    return running
+
+
+def start_lab(name: str, assume_yes: bool = False) -> None:
     meta = _require_provisioned(name)
+
+    # This is meant to run on a laptop with finite RAM (32-64GB, not
+    # unlimited) -- each lab's VMs are sized independently and talos-lab
+    # has no cross-lab awareness of total memory commitment, so starting
+    # a second lab on top of one already running is an easy way to
+    # overcommit the host silently. Warn and confirm rather than block
+    # outright: there are legitimate reasons to run two labs at once,
+    # this just makes sure it's a deliberate choice.
+    if not assume_yes:
+        already_running = _labs_with_running_vms(exclude=name)
+        if already_running:
+            console.print(
+                f"[yellow]warning:[/yellow] lab(s) already running: {', '.join(already_running)}"
+            )
+            console.print("starting another lab increases memory pressure. Current host memory:")
+            free_output = subprocess.run(["free", "-h"], capture_output=True, text=True)
+            console.print(free_output.stdout)
+            if not Confirm.ask(f"Start '{name}' anyway?", default=False):
+                console.print("aborted -- lab not started")
+                return
+
     console.print(f"[bold]{name}[/bold]: starting VMs...")
     for domain in vms.domain_names(name, meta["worker_count"]):
         vms.start_domain(domain)

@@ -41,9 +41,12 @@ def create(
         help="Single node acting as both control plane and worker (workloads are allowed to "
         "schedule on it). Cannot be combined with a nonzero worker count.",
     ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt if another lab is already running"
+    ),
 ) -> None:
     """Create (or resume) a lab: VMs, network, Talos bootstrap, kubeconfig."""
-    commands.create_lab(name, worker_count, control_plane_profile, worker_profile, single_node)
+    commands.create_lab(name, worker_count, control_plane_profile, worker_profile, single_node, yes)
 
 
 @app.command(name="list")
@@ -59,9 +62,14 @@ def use(name: str = typer.Argument(..., help="Lab name")) -> None:
 
 
 @app.command()
-def start(name: str = typer.Argument(..., help="Lab name")) -> None:
+def start(
+    name: str = typer.Argument(..., help="Lab name"),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt if another lab is already running"
+    ),
+) -> None:
     """Power on a lab's VMs (control plane + workers)."""
-    commands.start_lab(name)
+    commands.start_lab(name, assume_yes=yes)
 
 
 @app.command()
@@ -77,6 +85,18 @@ def stop(
 def delete(name: str = typer.Argument(..., help="Lab name")) -> None:
     """Tear down a lab's VMs, network, state, and kube context."""
     commands.delete_lab(name)
+
+
+@app.command()
+def status(name: str = typer.Argument(..., help="Lab name")) -> None:
+    """Show VM status, bootstrap stage, and live cluster readiness."""
+    commands.show_status(name)
+
+
+@app.command(name="status-all")
+def status_all() -> None:
+    """Show status for every registered lab."""
+    commands.show_status_all()
 
 
 @version_app.command("set")

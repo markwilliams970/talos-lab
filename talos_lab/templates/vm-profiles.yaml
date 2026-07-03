@@ -1,5 +1,10 @@
 # Golden VM profiles. Copied to ~/.talos-lab/templates/vm-profiles.yaml on
 # first run and owned by the user from then on -- edit the copy, not this file.
+micro:
+  cpu: 1
+  memory: 2048
+  disk: 10
+
 small:
   cpu: 2
   memory: 4096

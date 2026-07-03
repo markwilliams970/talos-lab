@@ -28,6 +28,17 @@ def domain_state(domain: str) -> str:
     return result.stdout.strip().lower()
 
 
+def domain_state_or_none(domain: str) -> str | None:
+    """Like domain_state(), but for `talos-lab status` -- callers there
+    need to distinguish "not created yet" (a normal, expected state at
+    early bootstrap stages) from an actual virsh error, without raising.
+    """
+    try:
+        return domain_state(domain)
+    except VirshError:
+        return None
+
+
 def start_domain(domain: str) -> None:
     if domain_state(domain) == "running":
         return  # already up -- idempotent no-op

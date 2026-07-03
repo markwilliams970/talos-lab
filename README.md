@@ -208,11 +208,14 @@ talos-lab list
 kubectl get nodes
 talos-lab use demo
 
-# 6. power the VMs off/on without destroying the lab
+# 6. check on it any time -- bootstrap stage, VM status, live cluster readiness
+talos-lab status demo
+
+# 7. power the VMs off/on without destroying the lab
 talos-lab stop demo
 talos-lab start demo
 
-# 7. tear it down for good
+# 8. tear it down for good
 talos-lab delete demo
 ```
 
@@ -251,6 +254,34 @@ Note that Talos VMs mount their root filesystem read-only with ephemeral
 state by default, so a `stop`/`start` cycle behaves like a reboot from the
 cluster's perspective — etcd and kubelet state on disk persist across the
 power cycle, but anything that only lived in memory does not.
+
+**Memory pressure warning.** talos-lab is built for a laptop with finite
+RAM (32-64GB, not unlimited), and each lab's VMs are sized independently
+with no awareness of what else is running. Both `talos-lab start` and
+`talos-lab create` check whether another lab already has running VMs
+before booting more, and if so, warn you and show real memory numbers
+before asking to continue:
+
+```
+$ talos-lab start labb
+warning: lab(s) already running: laba
+starting another lab increases memory pressure. Current host memory:
+               total        used        free      shared  buff/cache   available
+Mem:            30Gi         12Gi        5.4Gi        82Mi         13Gi         18Gi
+Swap:          1.9Gi        8.0Ki        1.9Gi
+
+Start 'labb' anyway? [y/n] (n):
+```
+
+Declining leaves things exactly as they were — for `start`, the lab just
+isn't started; for `create`, VM provisioning is skipped but the lab stays
+registered and resumable (re-run `create` later, same as any other
+partial-create interruption). Pass `--yes`/`-y` to skip the prompt (e.g.
+in scripts); if no other lab is running, neither command prompts at all.
+
+This is a nudge backed by real numbers, not a hard capacity check —
+talos-lab doesn't sum up profile sizes against host memory or otherwise
+try to guarantee both labs will actually fit.
 
 ---
 
@@ -303,16 +334,65 @@ that doesn't need multiple nodes.
 
 ---
 
+## 4d. Status
+
+`talos-lab status <name>` reports VM status, bootstrap progress, and live
+cluster readiness for one lab — and works at any stage, including before
+anything's been provisioned, which is exactly when it's most useful:
+
+```
+$ talos-lab status demo
+demo  talos=v1.13.5  topology=1 control-plane + 2 worker(s)  network=talos-demo
+
+Bootstrap stage:
+  done     VMs provisioned (OpenTofu)
+  done     Talos config applied
+  done     Cluster bootstrapped
+  done     Kubeconfig retrieved + nodes Ready
+  pending  Addons installed
+
+VMs:
+┏━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━┓
+┃ domain             ┃ role          ┃ virsh state ┃ ip          ┃
+┡━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━╇━━━━━━━━━━━━━┩
+│ demo-controlplane   │ control-plane │ running     │ 10.10.0.94  │
+│ demo-worker-0       │ worker        │ running     │ 10.10.0.119 │
+└────────────────────┴───────────────┴─────────────┴─────────────┘
+Cluster:
+  talos-k9o-1fs: Ready
+  talos-9i7-qu3: Ready
+
+kube context: talos-lab-demo (active)
+```
+
+If VMs are stopped or a node hasn't joined yet, the cluster section shows
+`unreachable` rather than hanging — this is a single quick check (10s
+timeout), not the same polling wait `create` does.
+
+`talos-lab status-all` runs this for every registered lab, one after
+another with a divider between them — useful for a quick "what's running
+right now" sweep across all your labs.
+
+---
+
 ## 5. VM sizing
 
 Profiles live in `~/.talos-lab/templates/vm-profiles.yaml` (seeded on first
 run, yours to edit):
 
 ```yaml
+micro:  { cpu: 1, memory: 2048,  disk: 10 }
 small:  { cpu: 2, memory: 4096,  disk: 20 }
 medium: { cpu: 4, memory: 8192,  disk: 40 }
 large:  { cpu: 8, memory: 16384, disk: 80 }
 ```
+
+Add/edit profiles freely — profile names are never hardcoded anywhere in
+talos-lab, everything reads this file directly. Note this file is only
+*seeded* once on first install; adding a profile to the shipped default
+later (as `micro` was added here) won't retroactively appear in an
+existing `~/.talos-lab/templates/vm-profiles.yaml` — add it there by hand
+too if you want it on an already-installed system.
 
 Choose per-role profiles at create time with `--cp-profile`/`--worker-profile`.
 Omit either one and `create` prompts for it interactively instead, showing
@@ -429,5 +509,6 @@ adding it. Re-check with `virsh -c qemu:///system list`.
   `cert-manager`, etc.) is tracked in state (`addons_installed`) but not
   yet wired up — install manually via `kubectl`/`helm` against the lab's
   context for now.
-- `talos-lab status <lab>` is not yet implemented; use `talos-lab list` and
-  `virsh`/`kubectl` directly in the meantime.
+- Memory pressure protection (section 4a) only checks whether another
+  lab's VMs are running, not actual host memory usage or whether the
+  profiles chosen would actually fit — it's a nudge, not a capacity check.
