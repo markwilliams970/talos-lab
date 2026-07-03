@@ -512,3 +512,9 @@ adding it. Re-check with `virsh -c qemu:///system list`.
 - Memory pressure protection (section 4a) only checks whether another
   lab's VMs are running, not actual host memory usage or whether the
   profiles chosen would actually fit — it's a nudge, not a capacity check.
+
+---
+
+## License
+
+[MIT](LICENSE)

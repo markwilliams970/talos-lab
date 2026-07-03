@@ -7,6 +7,8 @@ name = "talos-lab"
 version = "0.1.0"
 description = "Thin orchestration CLI over OpenTofu + libvirt + Talos Linux"
 requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "typer>=0.12",
     "PyYAML>=6.0",
