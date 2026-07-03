@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from rich.console import Console
-from rich.prompt import Confirm
+from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 from talos_lab import config, images, kubeconfig, network, paths, state, talosctl, tofu, vms
@@ -21,16 +21,55 @@ from talos_lab.exceptions import LabNotFoundError, TalosLabError
 console = Console()
 
 
+def _prompt_for_profile(role: str, default: str = "medium") -> str:
+    """Interactive only -- callers pass an explicit profile name (from
+    --cp-profile/--worker-profile) to skip this entirely. Shows the actual
+    cpu/memory/disk for every profile rather than just profile names, since
+    "medium" on its own tells you nothing about what you're about to boot.
+    """
+    profiles = config.load_vm_profiles()
+    console.print(f"[bold]{role} VM profile:[/bold]")
+    for profile_name, spec in profiles.items():
+        marker = "  (default)" if profile_name == default else ""
+        console.print(
+            f"  {profile_name:<8} {spec['cpu']} vCPU / {spec['memory']}MB / {spec['disk']}GB{marker}"
+        )
+    return Prompt.ask(f"{role} profile", choices=list(profiles.keys()), default=default)
+
+
 def create_lab(
     name: str,
-    worker_count: int,
-    cp_profile_name: str = "medium",
-    worker_profile_name: str = "medium",
+    worker_count: int | None,
+    cp_profile_name: str | None = None,
+    worker_profile_name: str | None = None,
+    single_node: bool = False,
 ) -> None:
     paths.ensure_root_dirs()
 
     if not state.lab_exists(name):
+        # worker_count/single_node are only meaningful for a brand new
+        # lab -- on resume they're read back from the stored registry
+        # entry below instead, so an incomplete/inconsistent resume
+        # invocation (e.g. forgetting --single-node) can't diverge from
+        # what was actually registered.
+        if single_node:
+            if worker_count not in (None, 0):
+                raise TalosLabError("--single-node can't be combined with a nonzero worker count")
+            worker_count = 0
+        elif worker_count is None:
+            raise TalosLabError("worker_count is required unless --single-node is passed")
+
         net = network.allocate_network(name)
+        if cp_profile_name is None:
+            cp_profile_name = _prompt_for_profile("Control-plane")
+        if single_node:
+            # No workers exist in this topology -- prompting for a worker
+            # profile would just be confusing. The value is inert (0
+            # instances get created) but the .tf template still needs a
+            # valid profile dict to render, so reuse the control-plane one.
+            worker_profile_name = cp_profile_name
+        elif worker_profile_name is None:
+            worker_profile_name = _prompt_for_profile("Worker")
         # Snapshot the version + resolved VM specs at creation time, not
         # just the profile/version names -- both can be edited or repinned
         # later, and this lab should keep reporting what it was actually
@@ -50,6 +89,7 @@ def create_lab(
             {
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "worker_count": worker_count,
+                "single_node": single_node,
                 "control_plane_profile": cp_profile_name,
                 "worker_profile": worker_profile_name,
                 "control_plane_spec": cp_profile,
@@ -78,6 +118,13 @@ def create_lab(
         worker_profile = meta["worker_spec"]
         control_plane_mac = meta["control_plane_mac"]
         worker_macs = meta["worker_macs"]
+        # Resuming trusts the stored topology, not whatever was passed to
+        # this invocation -- same reasoning as talos_version/profiles above.
+        # Otherwise a resume that forgets --single-node (or passes a
+        # different worker_count) would silently diverge from what was
+        # actually registered.
+        worker_count = meta["worker_count"]
+        single_node = meta.get("single_node", False)
 
     paths.ensure_lab_dirs(name)
     lab_state = state.load_lab_state(name)
@@ -124,7 +171,13 @@ def create_lab(
         # own flag rather than lumping it in with talos_bootstrapped.
         console.print(f"[bold]{name}[/bold]: generating and applying Talos config...")
         talos_dir = paths.lab_talos_dir(name)
-        talosctl.gen_config(name, lab_state["control_plane_ip"], talos_dir, talos_version)
+        talosctl.gen_config(
+            name,
+            lab_state["control_plane_ip"],
+            talos_dir,
+            talos_version,
+            allow_scheduling_on_control_plane=single_node,
+        )
 
         talosctl.apply_config(
             lab_state["control_plane_ip"], talos_dir / "controlplane.yaml", talosconfig
@@ -145,6 +198,19 @@ def create_lab(
             paths.lab_talosconfig_file(name),
             paths.lab_kubeconfig_file(name),
         )
+        # Kubeconfig being fetchable only proves the API server answered
+        # once -- it says nothing about whether every node has actually
+        # joined and gone Ready yet. Without this, `create` could report
+        # "ready" while the apiserver was still mid-startup and about to
+        # become briefly unreachable again (observed in practice).
+        console.print(f"[bold]{name}[/bold]: waiting for nodes to join and become Ready...")
+        kubeconfig.wait_for_nodes_ready(
+            paths.lab_kubeconfig_file(name), expected_count=1 + len(lab_state["worker_ips"])
+        )
+        if single_node:
+            kubeconfig.label_single_node_as_worker(paths.lab_kubeconfig_file(name))
+        elif lab_state["worker_ips"]:
+            kubeconfig.label_worker_nodes(paths.lab_kubeconfig_file(name))
         kubeconfig.merge_into_global(paths.lab_kubeconfig_file(name), name)
         lab_state = state.update_lab_state(name, kubeconfig_ready=True)
 
@@ -173,13 +239,17 @@ def list_labs() -> None:
         marker = "*" if kubeconfig.context_name(lab_name) == active else ""
         lab_state = state.load_lab_state(lab_name)
         cp_spec = _format_spec(meta.get("control_plane_profile", "?"), meta.get("control_plane_spec"))
-        worker_spec = _format_spec(meta.get("worker_profile", "?"), meta.get("worker_spec"))
+        workers_column = (
+            "-- (single-node)"
+            if meta.get("single_node")
+            else f"{meta['worker_count']} x {_format_spec(meta.get('worker_profile', '?'), meta.get('worker_spec'))}"
+        )
         table.add_row(
             marker,
             lab_name,
             meta.get("talos_version", "unknown"),
             f"1 x {cp_spec}",
-            f"{meta['worker_count']} x {worker_spec}",
+            workers_column,
             "yes" if lab_state["kubeconfig_ready"] else "no",
         )
 

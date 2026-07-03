@@ -197,6 +197,8 @@ talos-lab version show
 talos-lab get
 
 # 3. create a lab: 1 control plane + 2 workers
+# (prompts for VM size per role since --cp-profile/--worker-profile
+#  aren't given here -- see section 5)
 talos-lab create demo 2
 
 # 4. list labs: VM counts/roles/sizes, Talos version, and active context
@@ -218,6 +220,12 @@ talos-lab delete demo
 timeout, a `tofu apply` error), fix the underlying issue and re-run the
 exact same `talos-lab create demo 2`. It picks up from the last completed
 stage instead of starting over.
+
+`create` doesn't report "ready" until it's actually confirmed the expected
+number of nodes have joined the cluster and gone `Ready` (polling `kubectl
+get nodes` against the lab's own kubeconfig, not just checking that
+kubeconfig was fetchable). `kubectl get nodes`/`get pods` work immediately
+once `create` exits — you shouldn't need to wait or retry after that.
 
 ---
 
@@ -260,7 +268,38 @@ CPU/memory/disk — is a **snapshot taken at `create` time**, not a live
 lookup. If you later `talos-lab version set` a different version or edit
 `vm-profiles.yaml`, existing labs keep reporting what they were actually
 built with; only the *next* `create` picks up the new values. `*` marks
-whichever lab's context is your current `kubectl` context.
+whichever lab's context is your current `kubectl` context. A `--single-node`
+lab (section 4c) shows `-- (single-node)` in the workers column instead of
+a misleading `0 x <profile>`.
+
+---
+
+## 4c. Single-node labs
+
+`talos-lab create <name> 1` still creates **two** VMs — a control plane
+and a worker, unchanged. For a single VM that acts as both, use
+`--single-node` instead of a worker count:
+
+```bash
+talos-lab create demo --single-node                    # prompts for one VM profile
+talos-lab create demo --single-node --cp-profile large  # skip the prompt
+```
+
+`--single-node` can't be combined with a nonzero worker count (it'll
+error). Unlike a plain `talos-lab create demo 0` — which also produces one
+VM, but leaves the default Kubernetes control-plane taint in place so
+nothing schedules on it — `--single-node` patches the generated Talos
+config (`cluster.allowSchedulingOnControlPlanes: true`) so the node is
+actually usable, and labels it with both roles:
+
+```
+$ kubectl get nodes
+NAME            STATUS   ROLES                 AGE   VERSION
+talos-vzi-nu1   Ready    control-plane,worker   1m    v1.36.2
+```
+
+Good for a minimal footprint on a laptop, or quickly testing something
+that doesn't need multiple nodes.
 
 ---
 
@@ -275,7 +314,20 @@ medium: { cpu: 4, memory: 8192,  disk: 40 }
 large:  { cpu: 8, memory: 16384, disk: 80 }
 ```
 
-Choose per-role profiles at create time:
+Choose per-role profiles at create time with `--cp-profile`/`--worker-profile`.
+Omit either one and `create` prompts for it interactively instead, showing
+every profile's actual cpu/memory/disk (not just the name — "medium" alone
+doesn't tell you what you're about to boot):
+
+```
+Control-plane VM profile:
+  small    2 vCPU / 4096MB / 20GB
+  medium   4 vCPU / 8192MB / 40GB  (default)
+  large    8 vCPU / 16384MB / 80GB
+Control-plane profile [small/medium/large] (medium):
+```
+
+Passing the flag skips the prompt for that role — useful for scripting:
 
 ```bash
 talos-lab create demo 2 --cp-profile large --worker-profile small
@@ -352,6 +404,16 @@ talosctl>`, `talos-lab get`, then `talos-lab delete <lab>` and recreate
 (a lab already bootstrapped under mismatched versions can't be repaired
 in place — its PKI material was already generated wrong).
 
+**`timed out waiting for N node(s) to go Ready`**
+Bootstrap succeeded and the API server came up, but not every expected
+node joined and went `Ready` within the timeout (~3 min). Check what's
+actually happening on the slow node — this is often a node that's still
+booting (check `virsh console`, same as the DHCP-timeout entry above) or
+a networking issue between nodes (flannel/CNI pods stuck). `kubectl get
+nodes`/`get pods -A` against the lab's kubeconfig
+(`~/.talos-lab/<lab>/kubeconfig`) will show which node(s) are missing or
+NotReady.
+
 **Permission denied talking to libvirt**
 Your user isn't in the `libvirt` group, or you haven't re-logged-in since
 adding it. Re-check with `virsh -c qemu:///system list`.
@@ -360,7 +422,9 @@ adding it. Re-check with `virsh -c qemu:///system list`.
 
 ## 9. Known v1 limitations
 
-- Single control-plane node only (no HA control plane yet).
+- Single control-plane node only (no HA control plane yet) — this is
+  separate from `--single-node` (section 4c), which is about one VM
+  serving both roles, not about control-plane redundancy.
 - Kubernetes addon installation (`metrics-server`, `ingress-nginx`,
   `cert-manager`, etc.) is tracked in state (`addons_installed`) but not
   yet wired up — install manually via `kubectl`/`helm` against the lab's

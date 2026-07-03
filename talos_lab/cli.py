@@ -26,12 +26,24 @@ console = Console()
 @app.command()
 def create(
     name: str = typer.Argument(..., help="Lab name"),
-    worker_count: int = typer.Argument(..., help="Number of worker nodes"),
-    control_plane_profile: str = typer.Option("medium", "--cp-profile", help="VM profile for the control plane"),
-    worker_profile: str = typer.Option("medium", "--worker-profile", help="VM profile for workers"),
+    worker_count: int = typer.Argument(
+        None, help="Number of worker nodes (omit when using --single-node)"
+    ),
+    control_plane_profile: str = typer.Option(
+        None, "--cp-profile", help="VM profile for the control plane (prompts if omitted)"
+    ),
+    worker_profile: str = typer.Option(
+        None, "--worker-profile", help="VM profile for workers (prompts if omitted)"
+    ),
+    single_node: bool = typer.Option(
+        False,
+        "--single-node",
+        help="Single node acting as both control plane and worker (workloads are allowed to "
+        "schedule on it). Cannot be combined with a nonzero worker count.",
+    ),
 ) -> None:
     """Create (or resume) a lab: VMs, network, Talos bootstrap, kubeconfig."""
-    commands.create_lab(name, worker_count, control_plane_profile, worker_profile)
+    commands.create_lab(name, worker_count, control_plane_profile, worker_profile, single_node)
 
 
 @app.command(name="list")

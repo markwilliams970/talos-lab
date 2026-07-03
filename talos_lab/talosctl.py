@@ -22,7 +22,16 @@ def _run(args: list[str]) -> subprocess.CompletedProcess:
     return result
 
 
-def gen_config(cluster_name: str, cp_endpoint_ip: str, output_dir: Path, talos_version: str) -> None:
+SINGLE_NODE_CONTROL_PLANE_PATCH = '{"cluster": {"allowSchedulingOnControlPlanes": true}}'
+
+
+def gen_config(
+    cluster_name: str,
+    cp_endpoint_ip: str,
+    output_dir: Path,
+    talos_version: str,
+    allow_scheduling_on_control_plane: bool = False,
+) -> None:
     """Writes controlplane.yaml, worker.yaml, talosconfig into output_dir.
 
     --talos-version pins the generated config schema to the lab's own
@@ -30,21 +39,29 @@ def gen_config(cluster_name: str, cp_endpoint_ip: str, output_dir: Path, talos_v
     a talosctl newer than the node's Talos OS emits config keys the node
     doesn't recognize yet (e.g. `grubUseUKICmdline` added well after
     v1.7.x), and apply-config fails with "unknown keys found".
+
+    allow_scheduling_on_control_plane sets cluster.allowSchedulingOnControlPlanes
+    via --config-patch-control-plane (a strategic-merge object, not JSON6902 --
+    JSON6902 patches aren't supported against this multi-document config
+    format and fail at gen-config time). Talos taints control-plane nodes
+    NoSchedule by default same as upstream Kubernetes; --single-node labs
+    need this patch or the sole node can't run any workloads at all.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-    _run(
-        [
-            "gen",
-            "config",
-            cluster_name,
-            f"https://{cp_endpoint_ip}:6443",
-            "--output-dir",
-            str(output_dir),
-            "--talos-version",
-            talos_version,
-            "--force",
-        ]
-    )
+    args = [
+        "gen",
+        "config",
+        cluster_name,
+        f"https://{cp_endpoint_ip}:6443",
+        "--output-dir",
+        str(output_dir),
+        "--talos-version",
+        talos_version,
+        "--force",
+    ]
+    if allow_scheduling_on_control_plane:
+        args += ["--config-patch-control-plane", SINGLE_NODE_CONTROL_PLANE_PATCH]
+    _run(args)
 
 
 def apply_config(node_ip: str, config_file: Path, talosconfig: Path) -> None:

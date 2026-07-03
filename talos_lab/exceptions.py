@@ -57,3 +57,12 @@ class VirshError(TalosLabError):
         super().__init__(message)
         self.command = command
         self.returncode = returncode
+
+
+class ClusterNotReadyError(TalosLabError):
+    def __init__(self, expected_count: int, timeout_seconds: int):
+        super().__init__(
+            f"timed out after {timeout_seconds}s waiting for {expected_count} node(s) to go Ready"
+        )
+        self.expected_count = expected_count
+        self.timeout_seconds = timeout_seconds
