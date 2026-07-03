@@ -7,7 +7,9 @@ shipped inside the package, then owned by the user.
 from __future__ import annotations
 
 import json
+import re
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -15,15 +17,45 @@ import yaml
 
 from talos_lab import paths
 
-DEFAULT_TALOS_VERSION = "v1.7.6"
+# Last-resort fallback only, used if talosctl isn't on PATH yet at seed
+# time. Prefer _detect_talosctl_version() below -- a hardcoded version
+# here inevitably goes stale and, worse, can silently mismatch whatever
+# talosctl the user actually has installed. That skew is not cosmetic:
+# a talosctl far newer than the pinned Talos OS version generates config
+# fields the node's OS doesn't recognize (apply-config fails outright)
+# and, more insidiously, can generate cluster PKI/bootstrap material the
+# node's older components reject, which surfaces later as a cascade of
+# "Unauthorized" errors between kubelet/apiserver/scheduler -- looking
+# nothing like a version problem unless you already know to suspect one.
+FALLBACK_TALOS_VERSION = "v1.7.6"
 
 _PACKAGE_DEFAULT_PROFILES = Path(__file__).parent / "templates" / "vm-profiles.yaml"
+
+
+def _detect_talosctl_version() -> str | None:
+    try:
+        result = subprocess.run(
+            ["talosctl", "version", "--client"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    match = re.search(r"Tag:\s*(v\S+)", result.stdout)
+    return match.group(1) if match else None
+
+
+def _default_talos_version() -> str:
+    return _detect_talosctl_version() or FALLBACK_TALOS_VERSION
 
 
 def _seed_defaults() -> None:
     paths.ensure_root_dirs()
     if not paths.VERSION_FILE.exists():
-        set_talos_version(DEFAULT_TALOS_VERSION)
+        set_talos_version(_default_talos_version())
     if not paths.VM_PROFILES_FILE.exists():
         shutil.copyfile(_PACKAGE_DEFAULT_PROFILES, paths.VM_PROFILES_FILE)
 

@@ -1,11 +1,3 @@
 output "network_name" {
   value = libvirt_network.lab.name
 }
-
-output "control_plane_mac" {
-  value = libvirt_domain.control_plane.network_interface[0].mac
-}
-
-output "worker_macs" {
-  value = [for d in libvirt_domain.worker : d.network_interface[0].mac]
-}

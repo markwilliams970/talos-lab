@@ -18,6 +18,7 @@ from talos_lab.exceptions import LabExistsError, LabNotFoundError
 
 DEFAULT_LAB_STATE = {
     "tofu_state_done": False,
+    "config_applied": False,
     "talos_bootstrapped": False,
     "kubeconfig_ready": False,
     "addons_installed": False,
@@ -93,7 +94,10 @@ def used_network_indices() -> set[int]:
 # ---- per-lab bootstrap state --------------------------------------------
 
 def load_lab_state(name: str) -> dict[str, Any]:
-    return _read_json(paths.lab_state_file(name), DEFAULT_LAB_STATE)
+    # Merge over defaults (not just fall back to them) so a lab created
+    # before a new state flag was added doesn't KeyError on it -- it
+    # picks up the flag's default instead of needing a migration.
+    return {**DEFAULT_LAB_STATE, **_read_json(paths.lab_state_file(name), DEFAULT_LAB_STATE)}
 
 
 def save_lab_state(name: str, state: dict[str, Any]) -> None:

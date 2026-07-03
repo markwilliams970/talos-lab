@@ -39,6 +39,12 @@ def create_lab(
         talos_version = config.get_talos_version()
         cp_profile = config.get_vm_profile(cp_profile_name)
         worker_profile = config.get_vm_profile(worker_profile_name)
+        # MACs are generated here (not read back from a Terraform output)
+        # so we can wait for their DHCP leases right after `apply` without
+        # any extra round-trip -- the provider has no stable "MAC of this
+        # interface" computed attribute we can rely on.
+        control_plane_mac = network.generate_mac()
+        worker_macs = [network.generate_mac() for _ in range(worker_count)]
         state.register_lab(
             name,
             {
@@ -52,6 +58,8 @@ def create_lab(
                 "network_index": net.index,
                 "network_name": net.name,
                 "talos_version": talos_version,
+                "control_plane_mac": control_plane_mac,
+                "worker_macs": worker_macs,
             },
         )
         state.save_lab_state(name, dict(state.DEFAULT_LAB_STATE))
@@ -68,6 +76,8 @@ def create_lab(
         talos_version = meta["talos_version"]
         cp_profile = meta["control_plane_spec"]
         worker_profile = meta["worker_spec"]
+        control_plane_mac = meta["control_plane_mac"]
+        worker_macs = meta["worker_macs"]
 
     paths.ensure_lab_dirs(name)
     lab_state = state.load_lab_state(name)
@@ -85,6 +95,8 @@ def create_lab(
             "worker_count": worker_count,
             "cp_profile": cp_profile,
             "worker_profile": worker_profile,
+            "control_plane_mac": control_plane_mac,
+            "worker_macs": worker_macs,
         }
         tofu.render_tofu_files(paths.lab_tofu_dir(name), template_context)
         tofu.render_network_xml(paths.lab_network_dir(name), template_context)
@@ -92,29 +104,36 @@ def create_lab(
         tofu.apply(paths.lab_tofu_dir(name), talos_image_path=str(talos_image))
         lab_state = state.update_lab_state(name, tofu_state_done=True)
 
-    if not lab_state["talos_bootstrapped"] or not lab_state.get("control_plane_ip"):
+    if not lab_state.get("control_plane_ip"):
         console.print(f"[bold]{name}[/bold]: discovering node IPs...")
-        outputs = tofu.output(paths.lab_tofu_dir(name))
-        macs = [outputs["control_plane_mac"], *outputs["worker_macs"]]
+        macs = [control_plane_mac, *worker_macs]
         leases = network.wait_for_leases(net.name, macs)
-        cp_ip = leases[outputs["control_plane_mac"].lower()]
-        worker_ips = [leases[mac.lower()] for mac in outputs["worker_macs"]]
+        cp_ip = leases[control_plane_mac.lower()]
+        worker_ips = [leases[mac.lower()] for mac in worker_macs]
         lab_state = state.update_lab_state(
             name, control_plane_ip=cp_ip, worker_ips=worker_ips
         )
 
-    if not lab_state["talos_bootstrapped"]:
+    talosconfig = paths.lab_talosconfig_file(name)
+
+    if not lab_state["config_applied"]:
+        # Once apply-config succeeds, the node drops out of insecure
+        # maintenance mode and starts requiring a client cert -- retrying
+        # this step with --insecure after a partial failure would fail
+        # differently ("tls: certificate required"), so gate it on its
+        # own flag rather than lumping it in with talos_bootstrapped.
         console.print(f"[bold]{name}[/bold]: generating and applying Talos config...")
         talos_dir = paths.lab_talos_dir(name)
-        talosctl.gen_config(name, lab_state["control_plane_ip"], talos_dir)
-        talosconfig = paths.lab_talosconfig_file(name)
+        talosctl.gen_config(name, lab_state["control_plane_ip"], talos_dir, talos_version)
 
         talosctl.apply_config(
             lab_state["control_plane_ip"], talos_dir / "controlplane.yaml", talosconfig
         )
         for worker_ip in lab_state["worker_ips"]:
             talosctl.apply_config(worker_ip, talos_dir / "worker.yaml", talosconfig)
+        lab_state = state.update_lab_state(name, config_applied=True)
 
+    if not lab_state["talos_bootstrapped"]:
         console.print(f"[bold]{name}[/bold]: bootstrapping cluster...")
         talosctl.bootstrap(lab_state["control_plane_ip"], talosconfig)
         lab_state = state.update_lab_state(name, talos_bootstrapped=True)

@@ -23,9 +23,14 @@ Install these on the Linux host before touching talos-lab:
 | [talosctl](https://www.talos.dev/latest/talos-guides/install/talosctl/) | generates configs, bootstraps the cluster | `talosctl version --client` |
 | kubectl | cluster validation, kubeconfig merge | `kubectl version --client` |
 | curl | used by `talos-lab get` to download the golden image | `curl --version` |
-| xz | used by `talos-lab get` to decompress the golden image | `xz --version` |
+| zstd, xz | used by `talos-lab get` to decompress the golden image (different Talos releases use different compression — talos-lab tries both) | `zstd --version`, `xz --version` |
 | qemu-img | converts the Talos disk image to qcow2 | `qemu-img --version` |
 | Python 3.10+ | runs talos-lab itself | `python3 --version` |
+
+**Install `talosctl` before running `talos-lab` for the first time.**
+`talos-lab` seeds its Talos-version pin (section 3a) by reading `talosctl
+version --client` and matching it — this matters more than it sounds
+like it should. See the callout in section 3a for why.
 
 Make sure your user can talk to libvirt without `sudo`:
 
@@ -100,29 +105,53 @@ All labs share **one** Talos version and **one** disk image (`version.json`
 before your first `talos-lab create`.
 
 talos-lab boots VMs directly from a pre-built disk image (no PXE/ISO install
-step), so it needs the **nocloud raw disk image**, not the installer ISO.
+step), so it needs the **metal raw disk image**, not the installer ISO.
 
 ### 3a. Pick a Talos version
 
 ```bash
-talos-lab version set v1.7.6
-talos-lab version show   # confirm
+talos-lab version show   # first run seeds this automatically — see below
 ```
+
+The **first time** you run any talos-lab command, it pins the Talos
+version to whatever `talosctl version --client` reports on your machine —
+you don't need to set it yourself for a normal setup. To pin something
+else explicitly:
+
+```bash
+talos-lab version set v1.13.5
+```
+
+> **Why the version pin matters more than it looks like it should:** a
+> `talosctl` client meaningfully newer than the Talos OS version running
+> in your VMs causes real, hard-to-diagnose failures — not just a warning.
+> `talosctl gen config` uses the *client's* schema, so a newer client emits
+> config fields an older node's OS doesn't recognize
+> (`apply-config` fails with "unknown keys found during decoding"). Worse:
+> even once that's worked around, the client's certificate/PKI generation
+> logic is also newer, and can produce cluster bootstrap material the
+> older node's kubelet/apiserver/etcd don't handle correctly — which
+> doesn't fail loudly, it surfaces later as a cascade of `Unauthorized`
+> errors between kubelet, apiserver, and scheduler well after `create`
+> reports success. If you ever see that, the fix is matching the Talos OS
+> version to your installed `talosctl` (`talos-lab version set` + a fresh
+> `talos-lab get`), not chasing the individual auth errors.
 
 ### 3b. Fetch the image
 
 ```bash
 talos-lab get           # fetches whatever version is currently pinned
-talos-lab get v1.7.6    # or fetch a specific version explicitly ("1.7.6" also works)
+talos-lab get v1.13.5   # or fetch a specific version explicitly ("1.13.5" also works)
 ```
 
-This downloads `nocloud-amd64.raw.xz` from the matching
-[siderolabs/talos GitHub release](https://github.com/siderolabs/talos/releases),
-decompresses it, converts it to qcow2 with `qemu-img`, and writes it to
-exactly where talos-lab expects it:
+This downloads the `metal-amd64.raw.<ext>` asset from the matching
+[siderolabs/talos GitHub release](https://github.com/siderolabs/talos/releases)
+(trying `.zst` then `.xz` — different Talos releases use different
+compression), decompresses it, converts it to qcow2 with `qemu-img`, and
+writes it to exactly where talos-lab expects it:
 
 ```
-~/.talos-lab/images/talos-<version>-nocloud-amd64.qcow2
+~/.talos-lab/images/talos-<version>.qcow2
 ```
 
 If an image already exists for that version, `get` **prompts before
@@ -137,15 +166,18 @@ list` shows you which version each existing lab was actually built with
 
 ### 3c. If the download fails
 
-Talos release asset names have been stable across recent versions, but if
-`get` fails with a 404, the tag or asset name may have changed. Check
-https://github.com/siderolabs/talos/releases/tag/\<version\> for the actual
-asset name, then fall back to the manual path:
+Talos release asset **naming is not stable across versions** — e.g. older
+releases published a `nocloud-amd64.raw.xz` asset that's gone entirely in
+newer ones, leaving only `metal-amd64.raw.zst`. If `get` fails, it prints
+every URL it tried; check
+https://github.com/siderolabs/talos/releases/tag/\<version\> for the
+actual current asset name, then fall back to the manual path (adjust the
+extension/tool to whatever that release actually has):
 
 ```bash
-curl -LO "https://github.com/siderolabs/talos/releases/download/<version>/nocloud-amd64.raw.xz"
-xz -d nocloud-amd64.raw.xz
-qemu-img convert -O qcow2 nocloud-amd64.raw ~/.talos-lab/images/talos-<version>-nocloud-amd64.qcow2
+curl -LO "https://github.com/siderolabs/talos/releases/download/<version>/metal-amd64.raw.zst"
+zstd -d metal-amd64.raw.zst      # or: xz -d metal-amd64.raw.xz
+qemu-img convert -O qcow2 metal-amd64.raw ~/.talos-lab/images/talos-<version>.qcow2
 ```
 
 The [Talos Image Factory](https://factory.talos.dev) is also worth knowing
@@ -158,8 +190,8 @@ fetches the stock, no-extensions image.
 ## 4. Quick start
 
 ```bash
-# 1. pin a Talos version (once)
-talos-lab version set v1.7.6
+# 1. confirm the auto-detected version pin (matches your installed talosctl)
+talos-lab version show
 
 # 2. fetch the matching image into ~/.talos-lab/images/
 talos-lab get
@@ -287,20 +319,38 @@ changed. The error prints the exact URL and release-tag page it tried;
 see section 3c for the manual fallback.
 
 **`error: missing required tool(s) on PATH: ...` from `talos-lab get`**
-Install whichever of `curl`/`xz`/`qemu-img` is missing (section 1).
+Install whichever of `curl`/`zstd`/`xz`/`qemu-img` is missing (section 1).
 
 **`tofu apply` fails referencing the `default` pool**
 The libvirt storage pool doesn't exist yet — see the pool setup snippet in
 section 1.
 
 **`timed out waiting for DHCP leases on network ...`**
-The VM likely failed to boot the image (bad/corrupt qcow2, or you converted
-an ISO instead of the nocloud raw disk). Check with:
+The VM booted but its network never came up (or it never booted at all).
+talos-lab configures a serial console on every domain, so check it first —
+this is almost always faster than guessing:
 
 ```bash
 virsh list --all
-virsh console talos-<lab_name>-controlplane
+virsh console talos-<lab_name>-controlplane   # Ctrl+] to exit
 ```
+
+Two specific things to look for in that console output:
+- `x86_64 microarchitecture level 2 or higher is required, halting` — your
+  host's virtualized CPU is too old for this Talos version. talos-lab sets
+  `host-passthrough` CPU mode by default specifically to avoid this; if
+  you've customized the libvirt domain config, that's the setting to check.
+- Nothing at all, VM shows `running` in `virsh list` but the console is
+  silent and stays silent — check `virsh dumpxml <domain> | grep driver`
+  for the disk device; it should say `type='qcow2'`, not `type='raw'`. A
+  qcow2 volume being read as a raw disk boots nothing, silently.
+
+**`kubectl`/`talosctl` show `Unauthorized` errors after `create` reports success**
+This is a `talosctl` client vs. Talos OS version mismatch — see the
+callout in section 3a. Fix: `talos-lab version set <version matching your
+talosctl>`, `talos-lab get`, then `talos-lab delete <lab>` and recreate
+(a lab already bootstrapped under mismatched versions can't be repaired
+in place — its PKI material was already generated wrong).
 
 **Permission denied talking to libvirt**
 Your user isn't in the `libvirt` group, or you haven't re-logged-in since

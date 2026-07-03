@@ -8,6 +8,7 @@ we just poll `virsh net-dhcp-leases` for the result.
 
 from __future__ import annotations
 
+import random
 import re
 import subprocess
 import time
@@ -43,6 +44,16 @@ def allocate_network(lab_name: str) -> LabNetwork:
                 dhcp_end=f"{POOL_BASE}.{index}.254",
             )
     raise NetworkPoolExhaustedError()
+
+
+def generate_mac() -> str:
+    """Generates a MAC under 52:54:00, the QEMU/KVM locally-administered
+    OUI libvirt itself uses for auto-assigned guest MACs. Assigned once
+    per VM at lab-registration time and persisted, so we can wait for its
+    DHCP lease by MAC without depending on any Terraform-computed output.
+    """
+    tail = (random.randint(0, 0xFF) for _ in range(3))
+    return "52:54:00:%02x:%02x:%02x" % tuple(tail)
 
 
 _LEASE_LINE_RE = re.compile(

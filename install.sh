@@ -87,7 +87,7 @@ info "seeding default config in ${TALOS_LAB_HOME}"
 
 info "checking external dependencies"
 missing=0
-for tool in virsh tofu talosctl kubectl qemu-img; do
+for tool in virsh tofu talosctl kubectl qemu-img curl zstd xz; do
     if command -v "${tool}" >/dev/null 2>&1; then
         printf '  [ok]      %s\n' "${tool}"
     else

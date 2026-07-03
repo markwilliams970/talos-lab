@@ -22,8 +22,15 @@ def _run(args: list[str]) -> subprocess.CompletedProcess:
     return result
 
 
-def gen_config(cluster_name: str, cp_endpoint_ip: str, output_dir: Path) -> None:
-    """Writes controlplane.yaml, worker.yaml, talosconfig into output_dir."""
+def gen_config(cluster_name: str, cp_endpoint_ip: str, output_dir: Path, talos_version: str) -> None:
+    """Writes controlplane.yaml, worker.yaml, talosconfig into output_dir.
+
+    --talos-version pins the generated config schema to the lab's own
+    Talos version (not whatever talosctl's own default is) -- without it,
+    a talosctl newer than the node's Talos OS emits config keys the node
+    doesn't recognize yet (e.g. `grubUseUKICmdline` added well after
+    v1.7.x), and apply-config fails with "unknown keys found".
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
     _run(
         [
@@ -33,6 +40,9 @@ def gen_config(cluster_name: str, cp_endpoint_ip: str, output_dir: Path) -> None
             f"https://{cp_endpoint_ip}:6443",
             "--output-dir",
             str(output_dir),
+            "--talos-version",
+            talos_version,
+            "--force",
         ]
     )
 
@@ -52,18 +62,24 @@ def apply_config(node_ip: str, config_file: Path, talosconfig: Path) -> None:
     )
 
 
-def bootstrap(cp_ip: str, talosconfig: Path) -> None:
-    _run(
-        [
-            "bootstrap",
-            "--nodes",
-            cp_ip,
-            "--endpoints",
-            cp_ip,
-            "--talosconfig",
-            str(talosconfig),
-        ]
-    )
+def bootstrap(
+    cp_ip: str,
+    talosconfig: Path,
+    timeout_seconds: int = BOOTSTRAP_TIMEOUT_SECONDS,
+) -> None:
+    """apply-config reboots the node to lay down its new config to disk, so
+    its API port isn't reachable immediately -- retry instead of assuming
+    the node from the maintenance-mode apply-config call is still there."""
+    args = ["bootstrap", "--nodes", cp_ip, "--endpoints", cp_ip, "--talosconfig", str(talosconfig)]
+    deadline = time.monotonic() + timeout_seconds
+    last_error: TalosctlError | None = None
+    while time.monotonic() < deadline:
+        result = subprocess.run(["talosctl", *args], capture_output=True)
+        if result.returncode == 0:
+            return
+        last_error = TalosctlError(args, result.returncode)
+        time.sleep(BOOTSTRAP_POLL_INTERVAL_SECONDS)
+    raise last_error or TalosctlError(args, 1)
 
 
 def wait_for_kubeconfig(

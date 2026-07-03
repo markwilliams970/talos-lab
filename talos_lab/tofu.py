@@ -6,7 +6,6 @@ rendered .tf files, not here.
 
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 from pathlib import Path
@@ -76,15 +75,3 @@ def destroy(tofu_dir: Path, talos_image_path: str) -> None:
         cwd=tofu_dir,
         extra_env={"TF_VAR_talos_image_path": talos_image_path},
     )
-
-
-def output(tofu_dir: Path) -> dict[str, Any]:
-    result = subprocess.run(
-        ["tofu", "output", "-json"],
-        cwd=tofu_dir,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    raw = json.loads(result.stdout)
-    return {key: value["value"] for key, value in raw.items()}

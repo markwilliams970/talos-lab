@@ -2,7 +2,7 @@ terraform {
   required_providers {
     libvirt = {
       source  = "dmacvicar/libvirt"
-      version = "~> 0.7"
+      version = "~> 0.9"
     }
   }
 }
@@ -13,77 +13,225 @@ provider "libvirt" {
 
 resource "libvirt_network" "lab" {
   name      = "{{ network_name }}"
-  mode      = "nat"
-  domain    = "{{ lab_name }}.talos.local"
-  addresses = ["{{ network_cidr }}"]
   autostart = true
 
-  dhcp {
-    enabled = true
+  forward = {
+    mode = "nat"
   }
+
+  domain = {
+    name = "{{ lab_name }}.talos.local"
+  }
+
+  ips = [
+    {
+      address = "{{ network_gateway }}"
+      prefix  = 24
+      dhcp = {
+        ranges = [
+          {
+            start = "{{ network_dhcp_start }}"
+            end   = "{{ network_dhcp_end }}"
+          }
+        ]
+      }
+    }
+  ]
 }
 
 resource "libvirt_volume" "talos_image" {
-  name   = "{{ lab_name }}-talos-base.qcow2"
-  pool   = "default"
-  source = var.talos_image_path
-  format = "qcow2"
+  name = "{{ lab_name }}-talos-base.qcow2"
+  pool = "default"
+
+  target = {
+    format = {
+      type = "qcow2"
+    }
+  }
+
+  create = {
+    content = {
+      url = var.talos_image_path
+    }
+  }
 }
 
 resource "libvirt_volume" "control_plane_disk" {
-  name           = "{{ lab_name }}-controlplane.qcow2"
-  pool           = "default"
-  base_volume_id = libvirt_volume.talos_image.id
-  size           = {{ cp_profile.disk }} * 1024 * 1024 * 1024
+  name     = "{{ lab_name }}-controlplane.qcow2"
+  pool     = "default"
+  capacity = {{ cp_profile.disk }} * 1024 * 1024 * 1024
+
+  target = {
+    format = {
+      type = "qcow2"
+    }
+  }
+
+  backing_store = {
+    path = libvirt_volume.talos_image.path
+    format = {
+      type = "qcow2"
+    }
+  }
 }
 
 resource "libvirt_domain" "control_plane" {
-  name   = "{{ lab_name }}-controlplane"
-  memory = {{ cp_profile.memory }}
-  vcpu   = {{ cp_profile.cpu }}
+  name        = "{{ lab_name }}-controlplane"
+  type        = "kvm"
+  memory      = {{ cp_profile.memory }}
+  memory_unit = "MiB"
+  vcpu        = {{ cp_profile.cpu }}
+  running     = true
 
-  network_interface {
-    network_id     = libvirt_network.lab.id
-    wait_for_lease = false
+  cpu = {
+    mode = "host-passthrough"
   }
 
-  disk {
-    volume_id = libvirt_volume.control_plane_disk.id
+  features = {
+    acpi = true
+    apic = {}
   }
 
-  console {
-    type        = "pty"
-    target_port = "0"
-    target_type = "serial"
+  os = {
+    type         = "hvm"
+    type_arch    = "x86_64"
+    type_machine = "q35"
+    boot_devices = [{ dev = "hd" }]
+  }
+
+  devices = {
+    disks = [
+      {
+        source = {
+          file = {
+            file = libvirt_volume.control_plane_disk.path
+          }
+        }
+        target = {
+          dev = "vda"
+          bus = "virtio"
+        }
+        driver = {
+          name = "qemu"
+          type = "qcow2"
+        }
+      }
+    ]
+    interfaces = [
+      {
+        model = {
+          type = "virtio"
+        }
+        mac = {
+          address = "{{ control_plane_mac }}"
+        }
+        source = {
+          network = {
+            network = libvirt_network.lab.name
+          }
+        }
+      }
+    ]
+    serials = [
+      {
+        target = {
+          type = "isa-serial"
+          port = 0
+        }
+      }
+    ]
   }
 }
 
 resource "libvirt_volume" "worker_disk" {
-  count          = var.worker_count
-  name           = "{{ lab_name }}-worker-${count.index}.qcow2"
-  pool           = "default"
-  base_volume_id = libvirt_volume.talos_image.id
-  size           = {{ worker_profile.disk }} * 1024 * 1024 * 1024
+  count    = var.worker_count
+  name     = "{{ lab_name }}-worker-${count.index}.qcow2"
+  pool     = "default"
+  capacity = {{ worker_profile.disk }} * 1024 * 1024 * 1024
+
+  target = {
+    format = {
+      type = "qcow2"
+    }
+  }
+
+  backing_store = {
+    path = libvirt_volume.talos_image.path
+    format = {
+      type = "qcow2"
+    }
+  }
+}
+
+locals {
+  worker_macs = [{% for mac in worker_macs %}{{ mac | tojson }}{% if not loop.last %}, {% endif %}{% endfor %}]
 }
 
 resource "libvirt_domain" "worker" {
-  count  = var.worker_count
-  name   = "{{ lab_name }}-worker-${count.index}"
-  memory = {{ worker_profile.memory }}
-  vcpu   = {{ worker_profile.cpu }}
+  count       = var.worker_count
+  name        = "{{ lab_name }}-worker-${count.index}"
+  type        = "kvm"
+  memory      = {{ worker_profile.memory }}
+  memory_unit = "MiB"
+  vcpu        = {{ worker_profile.cpu }}
+  running     = true
 
-  network_interface {
-    network_id     = libvirt_network.lab.id
-    wait_for_lease = false
+  cpu = {
+    mode = "host-passthrough"
   }
 
-  disk {
-    volume_id = libvirt_volume.worker_disk[count.index].id
+  features = {
+    acpi = true
+    apic = {}
   }
 
-  console {
-    type        = "pty"
-    target_port = "0"
-    target_type = "serial"
+  os = {
+    type         = "hvm"
+    type_arch    = "x86_64"
+    type_machine = "q35"
+    boot_devices = [{ dev = "hd" }]
+  }
+
+  devices = {
+    disks = [
+      {
+        source = {
+          file = {
+            file = libvirt_volume.worker_disk[count.index].path
+          }
+        }
+        target = {
+          dev = "vda"
+          bus = "virtio"
+        }
+        driver = {
+          name = "qemu"
+          type = "qcow2"
+        }
+      }
+    ]
+    interfaces = [
+      {
+        model = {
+          type = "virtio"
+        }
+        mac = {
+          address = local.worker_macs[count.index]
+        }
+        source = {
+          network = {
+            network = libvirt_network.lab.name
+          }
+        }
+      }
+    ]
+    serials = [
+      {
+        target = {
+          type = "isa-serial"
+          port = 0
+        }
+      }
+    ]
   }
 }

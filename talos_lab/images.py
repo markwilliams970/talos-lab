@@ -1,12 +1,19 @@
 """Talos disk image management.
 
-`download_image` fetches the nocloud raw disk image straight from the
+`download_image` fetches the metal raw disk image straight from the
 siderolabs/talos GitHub release assets, decompresses it, and converts it
-to qcow2 -- shelling out to curl/xz/qemu-img rather than reimplementing
-any of that. Asset naming has held steady across recent Talos releases,
-but if a future release renames it, `download_image` will fail with the
-URL it tried, which is enough to go fix by hand (see README section 3
-for the manual fallback).
+to qcow2 -- shelling out to curl/zstd/xz/qemu-img rather than
+reimplementing any of that.
+
+Asset naming is NOT stable across Talos releases: older releases (e.g.
+v1.7.x) published a `nocloud-amd64.raw.xz` asset that newer releases have
+dropped entirely, keeping only `metal-amd64.raw.<ext>` (which does exist
+across both old and new releases we've checked -- v1.7.6 and v1.13.5).
+Compression format also changed from xz to zstd along the way. So we
+target "metal" and just try both compression extensions, taking whichever
+one the release actually has. If a future release changes naming again,
+this will fail with the URLs it tried, which is enough to go fix by hand
+(see README section 3 for the manual fallback).
 """
 
 from __future__ import annotations
@@ -20,11 +27,12 @@ from pathlib import Path
 from talos_lab import paths
 from talos_lab.exceptions import ImageDownloadError, ImageNotFoundError
 
-GITHUB_RELEASE_ASSET_URL = (
-    "https://github.com/siderolabs/talos/releases/download/{version}/nocloud-amd64.raw.xz"
-)
+ASSET_URL_TEMPLATE = "https://github.com/siderolabs/talos/releases/download/{version}/metal-amd64.raw.{ext}"
 
-REQUIRED_TOOLS = ("curl", "xz", "qemu-img")
+# (file extension, decompression tool) -- tried in this order.
+COMPRESSION_FORMATS = (("zst", "zstd"), ("xz", "xz"))
+
+REQUIRED_TOOLS = ("curl", "zstd", "xz", "qemu-img")
 
 
 def normalize_version(version: str) -> str:
@@ -32,7 +40,7 @@ def normalize_version(version: str) -> str:
 
 
 def image_path(talos_version: str) -> Path:
-    return paths.IMAGES_DIR / f"talos-{talos_version}-nocloud-amd64.qcow2"
+    return paths.IMAGES_DIR / f"talos-{talos_version}.qcow2"
 
 
 def ensure_image(talos_version: str) -> Path:
@@ -47,7 +55,7 @@ def ensure_image(talos_version: str) -> Path:
 
 
 def download_image(talos_version: str) -> Path:
-    """Downloads, decompresses, and converts the Talos nocloud disk image
+    """Downloads, decompresses, and converts the Talos metal disk image
     for `talos_version`, replacing any existing image for that version.
     Caller is responsible for confirming any overwrite before calling this.
     """
@@ -59,25 +67,35 @@ def download_image(talos_version: str) -> Path:
 
     paths.IMAGES_DIR.mkdir(parents=True, exist_ok=True)
     target = image_path(talos_version)
-    url = GITHUB_RELEASE_ASSET_URL.format(version=talos_version)
 
     with tempfile.TemporaryDirectory(dir=paths.IMAGES_DIR) as tmp:
         tmp_dir = Path(tmp)
-        raw_xz = tmp_dir / "nocloud-amd64.raw.xz"
-        raw = tmp_dir / "nocloud-amd64.raw"
         qcow2_tmp = tmp_dir / "image.qcow2"
 
-        result = subprocess.run(["curl", "-fL", "--progress-bar", "-o", str(raw_xz), url])
-        if result.returncode != 0:
+        compressed = None
+        decompress_tool = None
+        tried_urls = []
+        for ext, tool in COMPRESSION_FORMATS:
+            url = ASSET_URL_TEMPLATE.format(version=talos_version, ext=ext)
+            tried_urls.append(url)
+            candidate = tmp_dir / f"metal-amd64.raw.{ext}"
+            result = subprocess.run(["curl", "-fL", "--progress-bar", "-o", str(candidate), url])
+            if result.returncode == 0:
+                compressed = candidate
+                decompress_tool = tool
+                break
+
+        if compressed is None:
             raise ImageDownloadError(
-                f"failed to download {url} (exit {result.returncode}). "
-                "Check the version exists at "
-                f"https://github.com/siderolabs/talos/releases/tag/{talos_version}"
+                f"failed to download a Talos image for {talos_version} -- tried:\n"
+                + "\n".join(f"  {u}" for u in tried_urls)
+                + f"\nCheck the release assets at https://github.com/siderolabs/talos/releases/tag/{talos_version}"
             )
 
-        result = subprocess.run(["xz", "-d", str(raw_xz)])
+        result = subprocess.run([decompress_tool, "-d", str(compressed)])
         if result.returncode != 0:
             raise ImageDownloadError(f"failed to decompress downloaded image (exit {result.returncode})")
+        raw = compressed.with_suffix("")  # strips the .zst/.xz we just decompressed
 
         result = subprocess.run(["qemu-img", "convert", "-O", "qcow2", str(raw), str(qcow2_tmp)])
         if result.returncode != 0:
