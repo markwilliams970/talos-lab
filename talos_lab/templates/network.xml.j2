@@ -1,0 +1,15 @@
+<!--
+  Human-readable record of the libvirt network for lab "{{ lab_name }}".
+  Not applied directly by tofu -- the libvirt_network resource in
+  main.tf is the actual source of truth. Regenerated on every create.
+-->
+<network>
+  <name>{{ network_name }}</name>
+  <forward mode="nat"/>
+  <domain name="{{ lab_name }}.talos.local"/>
+  <ip address="{{ network_gateway }}" netmask="255.255.255.0">
+    <dhcp>
+      <range start="{{ network_dhcp_start }}" end="{{ network_dhcp_end }}"/>
+    </dhcp>
+  </ip>
+</network>

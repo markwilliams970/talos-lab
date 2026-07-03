@@ -1,0 +1,10 @@
+variable "talos_image_path" {
+  description = "Path to the Talos nocloud qcow2 image for the pinned version"
+  type        = string
+}
+
+variable "worker_count" {
+  description = "Number of worker nodes"
+  type        = number
+  default     = {{ worker_count }}
+}

@@ -1,0 +1,89 @@
+terraform {
+  required_providers {
+    libvirt = {
+      source  = "dmacvicar/libvirt"
+      version = "~> 0.7"
+    }
+  }
+}
+
+provider "libvirt" {
+  uri = "qemu:///system"
+}
+
+resource "libvirt_network" "lab" {
+  name      = "{{ network_name }}"
+  mode      = "nat"
+  domain    = "{{ lab_name }}.talos.local"
+  addresses = ["{{ network_cidr }}"]
+  autostart = true
+
+  dhcp {
+    enabled = true
+  }
+}
+
+resource "libvirt_volume" "talos_image" {
+  name   = "{{ lab_name }}-talos-base.qcow2"
+  pool   = "default"
+  source = var.talos_image_path
+  format = "qcow2"
+}
+
+resource "libvirt_volume" "control_plane_disk" {
+  name           = "{{ lab_name }}-controlplane.qcow2"
+  pool           = "default"
+  base_volume_id = libvirt_volume.talos_image.id
+  size           = {{ cp_profile.disk }} * 1024 * 1024 * 1024
+}
+
+resource "libvirt_domain" "control_plane" {
+  name   = "{{ lab_name }}-controlplane"
+  memory = {{ cp_profile.memory }}
+  vcpu   = {{ cp_profile.cpu }}
+
+  network_interface {
+    network_id     = libvirt_network.lab.id
+    wait_for_lease = false
+  }
+
+  disk {
+    volume_id = libvirt_volume.control_plane_disk.id
+  }
+
+  console {
+    type        = "pty"
+    target_port = "0"
+    target_type = "serial"
+  }
+}
+
+resource "libvirt_volume" "worker_disk" {
+  count          = var.worker_count
+  name           = "{{ lab_name }}-worker-${count.index}.qcow2"
+  pool           = "default"
+  base_volume_id = libvirt_volume.talos_image.id
+  size           = {{ worker_profile.disk }} * 1024 * 1024 * 1024
+}
+
+resource "libvirt_domain" "worker" {
+  count  = var.worker_count
+  name   = "{{ lab_name }}-worker-${count.index}"
+  memory = {{ worker_profile.memory }}
+  vcpu   = {{ worker_profile.cpu }}
+
+  network_interface {
+    network_id     = libvirt_network.lab.id
+    wait_for_lease = false
+  }
+
+  disk {
+    volume_id = libvirt_volume.worker_disk[count.index].id
+  }
+
+  console {
+    type        = "pty"
+    target_port = "0"
+    target_type = "serial"
+  }
+}

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "talos-lab"
+version = "0.1.0"
+description = "Thin orchestration CLI over OpenTofu + libvirt + Talos Linux"
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.12",
+    "PyYAML>=6.0",
+    "Jinja2>=3.1",
+    "rich>=13.0",
+]
+
+[project.scripts]
+talos-lab = "talos_lab.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["talos_lab"]
