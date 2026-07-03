@@ -12,6 +12,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from rich.console import Console
+from rich.prompt import Confirm
+from rich.table import Table
 
 from talos_lab import config, images, kubeconfig, network, paths, state, talosctl, tofu, vms
 from talos_lab.exceptions import LabNotFoundError, TalosLabError
@@ -29,6 +31,14 @@ def create_lab(
 
     if not state.lab_exists(name):
         net = network.allocate_network(name)
+        # Snapshot the version + resolved VM specs at creation time, not
+        # just the profile/version names -- both can be edited or repinned
+        # later, and this lab should keep reporting what it was actually
+        # built with (`list` and resumed `create` calls both read this
+        # back instead of re-resolving the current global config).
+        talos_version = config.get_talos_version()
+        cp_profile = config.get_vm_profile(cp_profile_name)
+        worker_profile = config.get_vm_profile(worker_profile_name)
         state.register_lab(
             name,
             {
@@ -36,9 +46,12 @@ def create_lab(
                 "worker_count": worker_count,
                 "control_plane_profile": cp_profile_name,
                 "worker_profile": worker_profile_name,
+                "control_plane_spec": cp_profile,
+                "worker_spec": worker_profile,
                 "network_cidr": net.cidr,
                 "network_index": net.index,
                 "network_name": net.name,
+                "talos_version": talos_version,
             },
         )
         state.save_lab_state(name, dict(state.DEFAULT_LAB_STATE))
@@ -52,12 +65,12 @@ def create_lab(
             dhcp_start=meta["network_cidr"].replace(".0/24", ".2"),
             dhcp_end=meta["network_cidr"].replace(".0/24", ".254"),
         )
+        talos_version = meta["talos_version"]
+        cp_profile = meta["control_plane_spec"]
+        worker_profile = meta["worker_spec"]
 
     paths.ensure_lab_dirs(name)
     lab_state = state.load_lab_state(name)
-    talos_version = config.get_talos_version()
-    cp_profile = config.get_vm_profile(cp_profile_name)
-    worker_profile = config.get_vm_profile(worker_profile_name)
 
     if not lab_state["tofu_state_done"]:
         console.print(f"[bold]{name}[/bold]: provisioning VMs + network via OpenTofu...")
@@ -119,16 +132,39 @@ def create_lab(
     console.print(f"[green]lab '{name}' ready[/green] -- context: {kubeconfig.context_name(name)}")
 
 
+def _format_spec(profile_name: str, spec: dict | None) -> str:
+    if not spec:
+        return profile_name  # older lab predating spec snapshotting -- best effort
+    return f"{profile_name} ({spec['cpu']}vCPU/{spec['memory']}MB/{spec['disk']}GB)"
+
+
 def list_labs() -> None:
     registry = state.load_registry()
     active = kubeconfig.current_context()
+
+    table = Table()
+    table.add_column("")
+    table.add_column("lab")
+    table.add_column("talos")
+    table.add_column("control-plane")
+    table.add_column("workers")
+    table.add_column("ready")
+
     for lab_name, meta in registry["labs"].items():
-        marker = "*" if kubeconfig.context_name(lab_name) == active else " "
+        marker = "*" if kubeconfig.context_name(lab_name) == active else ""
         lab_state = state.load_lab_state(lab_name)
-        console.print(
-            f"{marker} {lab_name}  workers={meta['worker_count']}  "
-            f"network={meta['network_cidr']}  ready={lab_state['kubeconfig_ready']}"
+        cp_spec = _format_spec(meta.get("control_plane_profile", "?"), meta.get("control_plane_spec"))
+        worker_spec = _format_spec(meta.get("worker_profile", "?"), meta.get("worker_spec"))
+        table.add_row(
+            marker,
+            lab_name,
+            meta.get("talos_version", "unknown"),
+            f"1 x {cp_spec}",
+            f"{meta['worker_count']} x {worker_spec}",
+            "yes" if lab_state["kubeconfig_ready"] else "no",
         )
+
+    console.print(table)
 
 
 def use_lab(name: str) -> None:
@@ -169,7 +205,11 @@ def delete_lab(name: str) -> None:
     tofu_dir = paths.lab_tofu_dir(name)
     if tofu_dir.exists():
         console.print(f"[bold]{name}[/bold]: destroying VMs + network via OpenTofu...")
-        talos_image = images.image_path(config.get_talos_version())
+        meta = state.get_lab_meta(name)
+        # Use the version this lab was actually built with, not whatever
+        # is currently pinned -- `version set` may have moved on since.
+        lab_talos_version = meta.get("talos_version") or config.get_talos_version()
+        talos_image = images.image_path(lab_talos_version)
         tofu.destroy(tofu_dir, talos_image_path=str(talos_image))
 
     kubeconfig.remove_context(name)
@@ -188,3 +228,20 @@ def version_set(talos_version: str) -> None:
 
 def version_show() -> None:
     console.print(config.get_talos_version())
+
+
+def get_image(version: str | None, assume_yes: bool = False) -> None:
+    talos_version = images.normalize_version(version) if version else config.get_talos_version()
+    target = images.image_path(talos_version)
+
+    if target.exists() and not assume_yes:
+        overwrite = Confirm.ask(
+            f"Image for {talos_version} already exists at {target}. Overwrite?", default=False
+        )
+        if not overwrite:
+            console.print("aborted -- existing image left in place")
+            return
+
+    console.print(f"fetching Talos {talos_version} image...")
+    path = images.download_image(talos_version)
+    console.print(f"[green]saved {path}[/green]")

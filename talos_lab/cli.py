@@ -77,6 +77,17 @@ def version_show() -> None:
     commands.version_show()
 
 
+@app.command()
+def get(
+    version: str = typer.Argument(
+        None, help="Talos version to fetch, e.g. 1.8.0 or v1.8.0. Defaults to the pinned version."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Overwrite an existing image without prompting"),
+) -> None:
+    """Fetch the Talos golden image for a version into ~/.talos-lab/images."""
+    commands.get_image(version, assume_yes=yes)
+
+
 def main() -> None:
     try:
         app()

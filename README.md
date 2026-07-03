@@ -22,6 +22,8 @@ Install these on the Linux host before touching talos-lab:
 | [terraform-provider-libvirt](https://github.com/dmacvicar/terraform-provider-libvirt) | libvirt resources for OpenTofu | auto-installed by `tofu init` |
 | [talosctl](https://www.talos.dev/latest/talos-guides/install/talosctl/) | generates configs, bootstraps the cluster | `talosctl version --client` |
 | kubectl | cluster validation, kubeconfig merge | `kubectl version --client` |
+| curl | used by `talos-lab get` to download the golden image | `curl --version` |
+| xz | used by `talos-lab get` to decompress the golden image | `xz --version` |
 | qemu-img | converts the Talos disk image to qcow2 | `qemu-img --version` |
 | Python 3.10+ | runs talos-lab itself | `python3 --version` |
 
@@ -72,6 +74,23 @@ pip install -e .
 talos-lab --help
 ```
 
+### Uninstalling
+
+```bash
+./uninstall.sh                      # removes the executable + venv only
+./uninstall.sh --purge-data         # also deletes ~/.talos-lab (prompts first)
+./uninstall.sh --purge-data --yes   # same, without the prompt
+```
+
+By default `uninstall.sh` only removes the `~/.local/bin/talos-lab` symlink
+and the venv — it deliberately leaves `~/.talos-lab` (registry, per-lab
+state, golden images) in place, since that's the only record of how to
+cleanly tear down any VMs/networks you've already provisioned. If you still
+have labs registered, it prints their names and tells you to `talos-lab
+delete` them first; deleting `~/.talos-lab` while VMs still exist orphans
+them in libvirt with nothing left tracking them. Pass `--purge-data` once
+you're sure, which still prompts for confirmation unless you add `--yes`.
+
 ---
 
 ## 3. Bootstrap the Talos golden image
@@ -81,7 +100,7 @@ All labs share **one** Talos version and **one** disk image (`version.json`
 before your first `talos-lab create`.
 
 talos-lab boots VMs directly from a pre-built disk image (no PXE/ISO install
-step), so you need the **nocloud raw disk image**, not the installer ISO.
+step), so it needs the **nocloud raw disk image**, not the installer ISO.
 
 ### 3a. Pick a Talos version
 
@@ -90,64 +109,49 @@ talos-lab version set v1.7.6
 talos-lab version show   # confirm
 ```
 
-### 3b. Get the image — two options
-
-**Option A: Talos Image Factory (recommended)**
-
-The [Image Factory](https://factory.talos.dev) lets you pick extensions
-(e.g. `qemu-guest-agent`, useful for clean shutdowns under libvirt) and
-generates a matching download URL for you. Steps:
-
-1. Open https://factory.talos.dev in a browser.
-2. Select your Talos version (must match what you set in step 3a).
-3. Under "System Extensions", add `siderolabs/qemu-guest-agent` (optional
-   but recommended for libvirt labs).
-4. Copy the generated **schematic ID** and use it in the download URL:
-
-   ```bash
-   SCHEMATIC_ID="<paste from factory.talos.dev>"
-   TALOS_VERSION="v1.7.6"
-   curl -LO "https://factory.talos.dev/image/${SCHEMATIC_ID}/${TALOS_VERSION}/nocloud-amd64.raw.xz"
-   ```
-
-**Option B: Stock image from the Talos GitHub release**
-
-No extensions, fastest path to a working lab:
+### 3b. Fetch the image
 
 ```bash
-TALOS_VERSION="v1.7.6"
-curl -LO "https://github.com/siderolabs/talos/releases/download/${TALOS_VERSION}/nocloud-amd64.raw.xz"
+talos-lab get           # fetches whatever version is currently pinned
+talos-lab get v1.7.6    # or fetch a specific version explicitly ("1.7.6" also works)
 ```
 
-> Asset names occasionally change between Talos releases. If the URL 404s,
-> browse https://github.com/siderolabs/talos/releases/tag/${TALOS_VERSION}
-> and grab whichever `nocloud-amd64.raw.*` asset is listed there.
-
-### 3c. Decompress and convert to qcow2
-
-libvirt volumes in talos-lab are qcow2. Convert the raw image:
-
-```bash
-xz -d nocloud-amd64.raw.xz            # -> nocloud-amd64.raw
-qemu-img convert -O qcow2 nocloud-amd64.raw nocloud-amd64.qcow2
-```
-
-### 3d. Place it where talos-lab expects it
-
-talos-lab looks for exactly:
+This downloads `nocloud-amd64.raw.xz` from the matching
+[siderolabs/talos GitHub release](https://github.com/siderolabs/talos/releases),
+decompresses it, converts it to qcow2 with `qemu-img`, and writes it to
+exactly where talos-lab expects it:
 
 ```
 ~/.talos-lab/images/talos-<version>-nocloud-amd64.qcow2
 ```
 
+If an image already exists for that version, `get` **prompts before
+overwriting** it (pass `-y`/`--yes` to skip the prompt, e.g. in scripts).
+The write is atomic — if the download or conversion fails partway, the
+existing image (if any) is left untouched.
+
+Repeat whenever you `talos-lab version set` a different Talos version —
+each version gets its own image file alongside the others, and `talos-lab
+list` shows you which version each existing lab was actually built with
+(see section 4b).
+
+### 3c. If the download fails
+
+Talos release asset names have been stable across recent versions, but if
+`get` fails with a 404, the tag or asset name may have changed. Check
+https://github.com/siderolabs/talos/releases/tag/\<version\> for the actual
+asset name, then fall back to the manual path:
+
 ```bash
-mkdir -p ~/.talos-lab/images
-mv nocloud-amd64.qcow2 ~/.talos-lab/images/talos-v1.7.6-nocloud-amd64.qcow2
-qemu-img info ~/.talos-lab/images/talos-v1.7.6-nocloud-amd64.qcow2   # sanity check
+curl -LO "https://github.com/siderolabs/talos/releases/download/<version>/nocloud-amd64.raw.xz"
+xz -d nocloud-amd64.raw.xz
+qemu-img convert -O qcow2 nocloud-amd64.raw ~/.talos-lab/images/talos-<version>-nocloud-amd64.qcow2
 ```
 
-Repeat step 3 whenever you `talos-lab version set` a different Talos
-version — each version needs its own image file alongside the others.
+The [Talos Image Factory](https://factory.talos.dev) is also worth knowing
+about if you need a customized image (e.g. with the `qemu-guest-agent`
+system extension for clean shutdowns under libvirt) — `talos-lab get` only
+fetches the stock, no-extensions image.
 
 ---
 
@@ -157,12 +161,13 @@ version — each version needs its own image file alongside the others.
 # 1. pin a Talos version (once)
 talos-lab version set v1.7.6
 
-# 2. fetch the matching image (section 3) into ~/.talos-lab/images/
+# 2. fetch the matching image into ~/.talos-lab/images/
+talos-lab get
 
 # 3. create a lab: 1 control plane + 2 workers
 talos-lab create demo 2
 
-# 4. list labs and see which kube context is active
+# 4. list labs: VM counts/roles/sizes, Talos version, and active context
 talos-lab list
 
 # 5. use it
@@ -206,6 +211,24 @@ Note that Talos VMs mount their root filesystem read-only with ephemeral
 state by default, so a `stop`/`start` cycle behaves like a reboot from the
 cluster's perspective — etcd and kubelet state on disk persist across the
 power cycle, but anything that only lived in memory does not.
+
+---
+
+## 4b. Listing labs
+
+`talos-lab list` prints one row per lab:
+
+```
+   lab    talos    control-plane                workers                    ready
+ * demo   v1.7.6   1 x medium (4vCPU/8192MB/40GB)   2 x medium (4vCPU/8192MB/40GB)   yes
+```
+
+Everything in that row — Talos version, VM counts, roles, and resolved
+CPU/memory/disk — is a **snapshot taken at `create` time**, not a live
+lookup. If you later `talos-lab version set` a different version or edit
+`vm-profiles.yaml`, existing labs keep reporting what they were actually
+built with; only the *next* `create` picks up the new values. `*` marks
+whichever lab's context is your current `kubectl` context.
 
 ---
 
@@ -255,8 +278,16 @@ labs:
 ## 8. Troubleshooting
 
 **`error: Talos image for vX.Y.Z not found at ...`**
-You haven't completed section 3 for the currently pinned version, or the
-filename doesn't match `talos-<version>-nocloud-amd64.qcow2` exactly.
+Run `talos-lab get vX.Y.Z` (or `talos-lab get` if that's already your
+pinned version), then re-run `create`.
+
+**`error: failed to download ... (exit 22)` from `talos-lab get`**
+The asset 404'd — the version tag likely doesn't exist or its asset name
+changed. The error prints the exact URL and release-tag page it tried;
+see section 3c for the manual fallback.
+
+**`error: missing required tool(s) on PATH: ...` from `talos-lab get`**
+Install whichever of `curl`/`xz`/`qemu-img` is missing (section 1).
 
 **`tofu apply` fails referencing the `default` pool**
 The libvirt storage pool doesn't exist yet — see the pool setup snippet in

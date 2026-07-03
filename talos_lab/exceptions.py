@@ -44,6 +44,11 @@ class ImageNotFoundError(TalosLabError):
         super().__init__(message)
 
 
+class ImageDownloadError(TalosLabError):
+    def __init__(self, message: str):
+        super().__init__(message)
+
+
 class VirshError(TalosLabError):
     def __init__(self, command: list[str], returncode: int, detail: str = ""):
         message = f"virsh {' '.join(command)} failed with exit code {returncode}"
