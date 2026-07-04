@@ -17,10 +17,12 @@ from rich.console import Console
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
-from talos_lab import config, images, kubeconfig, network, paths, state, talosctl, tofu, vms
+from talos_lab import addons, config, images, kubeconfig, network, paths, state, talosctl, tofu, vms
 from talos_lab.exceptions import LabNotFoundError, TalosLabError
 
 console = Console()
+
+SMALL_PROFILES = {"micro", "small"}
 
 
 def _prompt_for_profile(role: str, default: str = "medium") -> str:
@@ -37,6 +39,35 @@ def _prompt_for_profile(role: str, default: str = "medium") -> str:
             f"  {profile_name:<8} {spec['cpu']} vCPU / {spec['memory']}MB / {spec['disk']}GB{marker}"
         )
     return Prompt.ask(f"{role} profile", choices=list(profiles.keys()), default=default)
+
+
+def _prompt_addons_enabled(
+    cp_profile_name: str, worker_profile_name: str, single_node: bool, assume_yes: bool
+) -> bool:
+    """Only called once, at first registration -- see RESUME CONSISTENCY:
+    a resumed `create` reads this back from the registry (addons_enabled)
+    instead of re-prompting. DaemonSet-style addons (metallb, ingress-nginx,
+    and Cilium itself) run on every node including the control plane, so a
+    constrained control-plane profile matters here even in a multi-node
+    lab, not just a constrained worker profile.
+    """
+    constrained = cp_profile_name in SMALL_PROFILES or (
+        not single_node and worker_profile_name in SMALL_PROFILES
+    )
+    if not constrained or assume_yes:
+        return True
+
+    console.print(
+        "[yellow]note:[/yellow] this lab's VM profile is small enough that the standard "
+        "add-on complement can meaningfully crowd out workloads:"
+    )
+    for addon_name in addons.enabled_addon_names():
+        console.print(f"  - {addon_name:<20} {addons.ADDON_DESCRIPTIONS.get(addon_name, '')}")
+    console.print(
+        "Cilium (the cluster's CNI) is always installed regardless of this choice -- "
+        "NetworkPolicy support isn't optional."
+    )
+    return Confirm.ask("Install the standard add-on complement?", default=True)
 
 
 def create_lab(
@@ -73,6 +104,9 @@ def create_lab(
             worker_profile_name = cp_profile_name
         elif worker_profile_name is None:
             worker_profile_name = _prompt_for_profile("Worker")
+        addons_enabled = _prompt_addons_enabled(
+            cp_profile_name, worker_profile_name, single_node, assume_yes
+        )
         # Snapshot the version + resolved VM specs at creation time, not
         # just the profile/version names -- both can be edited or repinned
         # later, and this lab should keep reporting what it was actually
@@ -100,9 +134,19 @@ def create_lab(
                 "network_cidr": net.cidr,
                 "network_index": net.index,
                 "network_name": net.name,
+                # dhcp_end/metallb_pool_* are snapshotted (not just the
+                # fixed-offset gateway/dhcp_start recomputed below) because
+                # the offsets themselves can change between talos-lab
+                # versions -- see network.py's DHCP/MetalLB split comment.
+                # A resume must keep using whatever was ACTUALLY applied
+                # by Terraform for this lab, not a newer default.
+                "network_dhcp_end": net.dhcp_end,
+                "network_metallb_pool_start": net.metallb_pool_start,
+                "network_metallb_pool_end": net.metallb_pool_end,
                 "talos_version": talos_version,
                 "control_plane_mac": control_plane_mac,
                 "worker_macs": worker_macs,
+                "addons_enabled": addons_enabled,
             },
         )
         state.save_lab_state(name, dict(state.DEFAULT_LAB_STATE))
@@ -114,7 +158,12 @@ def create_lab(
             cidr=meta["network_cidr"],
             gateway=meta["network_cidr"].replace(".0/24", ".1"),
             dhcp_start=meta["network_cidr"].replace(".0/24", ".2"),
-            dhcp_end=meta["network_cidr"].replace(".0/24", ".254"),
+            # Fall back to the pre-MetalLB-split full range/no pool for
+            # labs registered before these keys existed -- see the
+            # snapshot comment above and network.py's split comment.
+            dhcp_end=meta.get("network_dhcp_end", meta["network_cidr"].replace(".0/24", ".254")),
+            metallb_pool_start=meta.get("network_metallb_pool_start"),
+            metallb_pool_end=meta.get("network_metallb_pool_end"),
         )
         talos_version = meta["talos_version"]
         cp_profile = meta["control_plane_spec"]
@@ -128,6 +177,10 @@ def create_lab(
         # actually registered.
         worker_count = meta["worker_count"]
         single_node = meta.get("single_node", False)
+        # Missing on labs registered before this addon system existed --
+        # default to installing the standard complement, same as the
+        # prompt's own default.
+        addons_enabled = meta.get("addons_enabled", True)
 
     paths.ensure_lab_dirs(name)
     lab_state = state.load_lab_state(name)
@@ -201,6 +254,7 @@ def create_lab(
             talos_dir,
             talos_version,
             allow_scheduling_on_control_plane=single_node,
+            coredns_image=addons.coredns_image_override(),
         )
 
         talosctl.apply_config(
@@ -214,6 +268,21 @@ def create_lab(
         console.print(f"[bold]{name}[/bold]: bootstrapping cluster...")
         talosctl.bootstrap(lab_state["control_plane_ip"], talosconfig)
         lab_state = state.update_lab_state(name, talos_bootstrapped=True)
+
+    if not lab_state["cni_installed"]:
+        # Needs the kubeconfig fetched (idempotent -- wait_for_kubeconfig
+        # is re-called below too, this just needs it a step earlier).
+        # Nodes stay NotReady without a CNI, so this must run before
+        # wait_for_nodes_ready below, not after.
+        console.print(f"[bold]{name}[/bold]: waiting for kubeconfig...")
+        talosctl.wait_for_kubeconfig(
+            lab_state["control_plane_ip"],
+            paths.lab_talosconfig_file(name),
+            paths.lab_kubeconfig_file(name),
+        )
+        console.print(f"[bold]{name}[/bold]: installing CNI (Cilium, for NetworkPolicy support)...")
+        addons.install_cni(paths.lab_kubeconfig_file(name))
+        lab_state = state.update_lab_state(name, cni_installed=True)
 
     if not lab_state["kubeconfig_ready"]:
         console.print(f"[bold]{name}[/bold]: waiting for kubeconfig...")
@@ -237,6 +306,23 @@ def create_lab(
             kubeconfig.label_worker_nodes(paths.lab_kubeconfig_file(name))
         kubeconfig.merge_into_global(paths.lab_kubeconfig_file(name), name)
         lab_state = state.update_lab_state(name, kubeconfig_ready=True)
+
+    if not lab_state["addons_installed"]:
+        if addons_enabled:
+            console.print(f"[bold]{name}[/bold]: installing add-ons...")
+            skipped = addons.install_addons(
+                paths.lab_kubeconfig_file(name),
+                metallb_pool_start=net.metallb_pool_start,
+                metallb_pool_end=net.metallb_pool_end,
+            )
+            if "metallb" in skipped:
+                console.print(
+                    "[yellow]warning:[/yellow] skipped metallb -- this lab predates the "
+                    "MetalLB IP pool reservation. Recreate the lab to get MetalLB support."
+                )
+        else:
+            console.print(f"[bold]{name}[/bold]: skipping optional add-ons (declined at creation)")
+        lab_state = state.update_lab_state(name, addons_installed=True)
 
     console.print(f"[green]lab '{name}' ready[/green] -- context: {kubeconfig.context_name(name)}")
 
@@ -284,8 +370,9 @@ BOOTSTRAP_STAGES = (
     ("tofu_state_done", "VMs provisioned (OpenTofu)"),
     ("config_applied", "Talos config applied"),
     ("talos_bootstrapped", "Cluster bootstrapped"),
+    ("cni_installed", "CNI installed (Cilium)"),
     ("kubeconfig_ready", "Kubeconfig retrieved + nodes Ready"),
-    ("addons_installed", "Addons installed"),
+    ("addons_installed", "Add-ons installed"),
 )
 
 
@@ -303,9 +390,10 @@ def show_status(name: str) -> None:
     lab_state = state.load_lab_state(name)
 
     topology = "single-node" if meta.get("single_node") else f"1 control-plane + {meta['worker_count']} worker(s)"
+    addons_note = "enabled" if meta.get("addons_enabled", True) else "declined at creation"
     console.print(
         f"[bold]{name}[/bold]  talos={meta.get('talos_version', 'unknown')}  "
-        f"topology={topology}  network={meta.get('network_name', '?')}"
+        f"topology={topology}  network={meta.get('network_name', '?')}  add-ons={addons_note}"
     )
 
     console.print("\n[bold]Bootstrap stage:[/bold]")

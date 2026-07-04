@@ -5,6 +5,7 @@ this module owns none of the Talos machine-config semantics itself.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 from pathlib import Path
@@ -31,6 +32,7 @@ def gen_config(
     output_dir: Path,
     talos_version: str,
     allow_scheduling_on_control_plane: bool = False,
+    coredns_image: str | None = None,
 ) -> None:
     """Writes controlplane.yaml, worker.yaml, talosconfig into output_dir.
 
@@ -46,8 +48,21 @@ def gen_config(
     format and fail at gen-config time). Talos taints control-plane nodes
     NoSchedule by default same as upstream Kubernetes; --single-node labs
     need this patch or the sole node can't run any workloads at all.
+
+    Every lab always disables Talos's built-in Flannel CNI
+    (cluster.network.cni.name: "none") via a plain --config-patch, applied
+    to BOTH controlplane.yaml and worker.yaml (cluster-wide config has to
+    match on every node) -- see addons.yaml's `cni` section for why:
+    Flannel has no NetworkPolicy support, so talos-lab always installs
+    Cilium via Helm instead, post-bootstrap. coredns_image, if given,
+    overrides the image Talos's own (still Talos-managed, not replaced)
+    CoreDNS deployment uses -- addons.yaml's `coredns.image` is the only
+    thing that sets this.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
+    cluster_patch: dict = {"cluster": {"network": {"cni": {"name": "none"}}}}
+    if coredns_image:
+        cluster_patch["cluster"]["coreDNS"] = {"image": coredns_image}
     args = [
         "gen",
         "config",
@@ -57,6 +72,8 @@ def gen_config(
         str(output_dir),
         "--talos-version",
         talos_version,
+        "--config-patch",
+        json.dumps(cluster_patch),
         "--force",
     ]
     if allow_scheduling_on_control_plane:

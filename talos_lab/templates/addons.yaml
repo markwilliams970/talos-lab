@@ -1,0 +1,134 @@
+# Post-bootstrap Helm addons. Copied to ~/.talos-lab/templates/addons.yaml
+# on first run and owned by the user from then on -- edit the copy, not
+# this file. Every chart here is installed with `helm upgrade --install`
+# against the lab's own kubeconfig. chart_version pins below are current
+# stable releases as of when this file was written -- they are NOT
+# re-verified automatically, so after `helm repo add <repo_name> <repo_url>`
+# it's worth checking `helm search repo <repo_name>/<chart_name> --versions`
+# for anything newer before relying on them long-term.
+
+# CNI -- mandatory, no `enabled` toggle. Talos's built-in Flannel CNI (what
+# every lab would get if this weren't installed) has no NetworkPolicy
+# support, so talos-lab always patches the generated machine config to
+# disable it (cluster.network.cni.name: "none", see talosctl.gen_config)
+# in favor of installing this chart instead. Nodes report NotReady until
+# this succeeds -- kubelet ties overall node readiness to the container
+# runtime's CNI status -- so `create` installs it before waiting for nodes
+# to go Ready. The `values` below are Cilium-specific; swapping to a
+# different CNI chart entirely isn't supported without also changing them.
+cni:
+  namespace: kube-system
+  repo_name: cilium
+  repo_url: https://helm.cilium.io/
+  chart_name: cilium
+  chart_version: "1.16.5"
+  values:
+    ipam:
+      mode: kubernetes
+    kubeProxyReplacement: false
+    cgroup:
+      autoMount:
+        enabled: false
+      hostRoot: /sys/fs/cgroup
+    # Talos's kernel doesn't support loadable kernel modules, so the
+    # chart's own default capability set for these two containers (which
+    # includes SYS_MODULE) fails outright on a Talos node: the
+    # clean-cilium-state init container CrashLoopBackOffs with "unable to
+    # apply caps: can't apply capabilities: operation not permitted" --
+    # found by actually booting a lab and inspecting `kubectl describe
+    # pod` events, not anticipated in advance. Every other capability
+    # below matches the chart's own default list (values.yaml in the
+    # cilium/cilium chart source) minus SYS_MODULE.
+    securityContext:
+      capabilities:
+        ciliumAgent:
+          - CHOWN
+          - KILL
+          - NET_ADMIN
+          - NET_RAW
+          - IPC_LOCK
+          - SYS_ADMIN
+          - SYS_RESOURCE
+          - DAC_OVERRIDE
+          - FOWNER
+          - SETGID
+          - SETUID
+        cleanCiliumState:
+          - NET_ADMIN
+          - SYS_ADMIN
+          - SYS_RESOURCE
+
+# Talos deploys its own CoreDNS automatically at bootstrap
+# (cluster.coreDNS) -- this is NOT a separate Helm install and has no
+# `enabled` toggle. `image` only overrides the image Talos's own CoreDNS
+# deployment uses (threaded into gen_config as a cluster.coreDNS.image
+# config patch); leave blank to use whatever Talos's own default is.
+coredns:
+  image: ""
+
+# Standard addon complement. `create` prompts to skip all of these (CNI
+# above is unaffected -- it's never optional) when the control-plane or
+# worker VM profile is "micro"/"small", since they carry real memory
+# overhead that can crowd out workloads on a node that size. Toggle
+# individual addons off with `enabled: false`, or edit chart_version/values
+# to customize -- no code change needed for either.
+addons:
+  metrics-server:
+    enabled: true
+    namespace: kube-system
+    repo_name: metrics-server
+    repo_url: https://kubernetes-sigs.github.io/metrics-server/
+    chart_name: metrics-server
+    chart_version: "3.12.2"
+    values:
+      args:
+        - --kubelet-insecure-tls
+
+  cert-manager:
+    enabled: true
+    namespace: cert-manager
+    repo_name: jetstack
+    repo_url: https://charts.jetstack.io
+    chart_name: cert-manager
+    chart_version: "v1.16.2"
+    values:
+      crds:
+        enabled: true
+
+  kube-state-metrics:
+    enabled: true
+    namespace: kube-system
+    repo_name: prometheus-community
+    repo_url: https://prometheus-community.github.io/helm-charts
+    chart_name: kube-state-metrics
+    chart_version: "5.25.1"
+    values: {}
+
+  ingress-nginx:
+    enabled: true
+    namespace: ingress-nginx
+    repo_name: ingress-nginx
+    repo_url: https://kubernetes.github.io/ingress-nginx
+    chart_name: ingress-nginx
+    chart_version: "4.11.3"
+    values: {}
+    # Chart default is controller.service.type: LoadBalancer already --
+    # satisfied by the metallb addon below on this bare-metal/libvirt
+    # network, no override needed.
+
+  # Provides the LoadBalancer IPs ingress-nginx's Service (and anything
+  # else requesting type: LoadBalancer) needs on a bare libvirt network,
+  # which has no cloud LB of its own. L2 mode (ARP) is the only sensible
+  # choice for a single-host libvirt lab -- there's no BGP router to peer
+  # with. The address pool itself is NOT set here: it's computed per-lab
+  # from that lab's own network CIDR (see network.py's metallb_pool_start/
+  # metallb_pool_end and addons.install_addons) and applied as a separate
+  # IPAddressPool/L2Advertisement manifest after this chart installs.
+  metallb:
+    enabled: true
+    namespace: metallb-system
+    repo_name: metallb
+    repo_url: https://metallb.github.io/metallb
+    chart_name: metallb
+    chart_version: "0.14.9"
+    values: {}

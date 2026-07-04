@@ -78,16 +78,17 @@ case ":${PATH}:" in
         ;;
 esac
 
-# --- seed default config (version.json, vm-profiles.yaml) -------------------
+# --- seed default config (version.json, vm-profiles.yaml, addons.yaml) ------
 
 info "seeding default config in ${TALOS_LAB_HOME}"
 "${VENV_DIR}/bin/taloslab" version show >/dev/null
+"${VENV_DIR}/bin/python3" -c "from talos_lab import addons; addons.load_addons_config()"
 
 # --- check external tool dependencies (non-fatal) ----------------------------
 
 info "checking external dependencies"
 missing=0
-for tool in virsh tofu talosctl kubectl qemu-img curl zstd xz; do
+for tool in virsh tofu talosctl kubectl helm qemu-img curl zstd xz; do
     if command -v "${tool}" >/dev/null 2>&1; then
         printf '  [ok]      %s\n' "${tool}"
     else

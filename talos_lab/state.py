@@ -20,6 +20,7 @@ DEFAULT_LAB_STATE = {
     "tofu_state_done": False,
     "config_applied": False,
     "talos_bootstrapped": False,
+    "cni_installed": False,
     "kubeconfig_ready": False,
     "addons_installed": False,
     "control_plane_ip": None,
@@ -97,7 +98,19 @@ def load_lab_state(name: str) -> dict[str, Any]:
     # Merge over defaults (not just fall back to them) so a lab created
     # before a new state flag was added doesn't KeyError on it -- it
     # picks up the flag's default instead of needing a migration.
-    return {**DEFAULT_LAB_STATE, **_read_json(paths.lab_state_file(name), DEFAULT_LAB_STATE)}
+    raw = _read_json(paths.lab_state_file(name), DEFAULT_LAB_STATE)
+    merged = {**DEFAULT_LAB_STATE, **raw}
+    # cni_installed is the one flag that can't just default to False on a
+    # lab that predates it: such a lab's cluster is already bootstrapped
+    # and live with whatever CNI Talos originally applied (Flannel,
+    # before talos-lab always disabled it) -- swapping CNI on an
+    # already-running cluster isn't a safe "just resume" step the way
+    # every other flag here is, it would fight with the live Flannel
+    # setup instead of filling in a gap. Grandfather such labs in as
+    # already-settled instead of trying to install Cilium alongside it.
+    if "cni_installed" not in raw and raw.get("talos_bootstrapped"):
+        merged["cni_installed"] = True
+    return merged
 
 
 def save_lab_state(name: str, state: dict[str, Any]) -> None:

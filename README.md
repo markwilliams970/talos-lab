@@ -22,6 +22,7 @@ Install these on the Linux host before touching talos-lab:
 | [terraform-provider-libvirt](https://github.com/dmacvicar/terraform-provider-libvirt) | libvirt resources for OpenTofu | auto-installed by `tofu init` |
 | [talosctl](https://www.talos.dev/latest/talos-guides/install/talosctl/) | generates configs, bootstraps the cluster | `talosctl version --client` |
 | kubectl | cluster validation, kubeconfig merge | `kubectl version --client` |
+| [Helm](https://helm.sh) | installs the CNI + standard add-on complement post-bootstrap (section 6) | `helm version` |
 | curl | used by `taloslab get` to download the golden image | `curl --version` |
 | zstd, xz | used by `taloslab get` to decompress the golden image (different Talos releases use different compression — talos-lab tries both) | `zstd --version`, `xz --version` |
 | qemu-img | converts the Talos disk image to qcow2 | `qemu-img --version` |
@@ -446,6 +447,97 @@ labs:
   `10.10.1.0/24`, …), tracked in `~/.talos-lab/registry.json`
 - DHCP enabled; talos-lab discovers node IPs by polling
   `virsh net-dhcp-leases talos-<lab_name>` after VM creation
+- Each `/24` is split so MetalLB (section 6a) always has a static range
+  DHCP will never hand to a VM: `.1` gateway, `.2`–`.199` DHCP (far more
+  than any lab's realistic node count), `.200`–`.250` reserved for
+  MetalLB, `.251`–`.254` unused buffer. This split only applies to labs
+  created after it was introduced — older labs keep whatever DHCP range
+  Terraform actually applied for them at the time (see 6a).
+
+---
+
+## 6a. Add-ons
+
+After bootstrap, `create` installs a CNI (mandatory) plus a standard
+add-on complement (optional) via Helm, both driven by
+`~/.talos-lab/templates/addons.yaml` (seeded on first run, yours to edit
+— same pattern as `vm-profiles.yaml` in section 5).
+
+**CNI (always installed, not optional):** Talos's built-in Flannel CNI has
+no `NetworkPolicy` support, so talos-lab always disables it
+(`cluster.network.cni.name: "none"` in the generated machine config) and
+installs [Cilium](https://cilium.io) instead. Nodes report `NotReady`
+until this succeeds — a CNI is a hard requirement for a functioning
+cluster, not a nice-to-have, so there's no toggle for it.
+
+**CoreDNS:** Talos deploys its own CoreDNS automatically at bootstrap and
+talos-lab doesn't replace it — `addons.yaml`'s `coredns.image` only
+overrides the image Talos's own CoreDNS deployment uses; leave it blank
+to use Talos's default.
+
+**Standard add-on complement (optional, on by default):**
+
+| Add-on | Purpose |
+|---|---|
+| metrics-server | resource metrics for `kubectl top` |
+| cert-manager | TLS certificate automation |
+| kube-state-metrics | cluster object state metrics |
+| ingress-nginx | HTTP(S) ingress controller |
+| MetalLB | LoadBalancer IPs on this bare libvirt network (backs ingress-nginx's `Service`) |
+
+Toggle any of these off (`enabled: false`) or repin `chart_version`/`values`
+in `addons.yaml` — no code change needed either way.
+
+MetalLB always installs first, regardless of where it's listed in
+`addons.yaml` — ingress-nginx's chart defaults its Service to
+`type: LoadBalancer`, and if MetalLB isn't there yet to assign an IP,
+`ingress-nginx`'s install hangs until it times out. talos-lab also labels
+the `metallb-system` namespace `pod-security.kubernetes.io/enforce=privileged`
+before installing it — Talos's default cluster-wide Pod Security policy
+(`enforce: baseline`, applied to every namespace except `kube-system`)
+otherwise rejects MetalLB's `speaker` DaemonSet outright, since it needs
+`hostNetwork`/`hostPort`/`NET_ADMIN` to do L2 announcement. Both of these
+were found by actually booting a lab, not just written speculatively —
+see the note at the end of this section.
+
+`create` prompts to skip *all* of them (CNI is unaffected) when the
+control-plane or worker VM profile is `micro`/`small`, since they carry
+real memory overhead that can crowd out workloads on a node that size:
+
+```
+note: this lab's VM profile is small enough that the standard add-on
+complement can meaningfully crowd out workloads:
+  - metrics-server       resource metrics for `kubectl top`
+  - cert-manager         TLS certificate automation
+  - kube-state-metrics   cluster object state metrics
+  - ingress-nginx        HTTP(S) ingress controller
+  - metallb              LoadBalancer IPs on this bare libvirt network
+Cilium (the cluster's CNI) is always installed regardless of this choice
+-- NetworkPolicy support isn't optional.
+Install the standard add-on complement? [y/n] (y):
+```
+
+This is a one-time decision made at `create` time (like `--single-node` or
+the VM profile), stored per-lab and reused on a resumed `create` — it
+won't re-prompt or silently change your answer on retry. `--yes` skips the
+prompt and installs the complement (the default answer).
+
+Labs created before this feature existed don't have a reserved MetalLB
+range (see section 6's DHCP/MetalLB split) — for those, everything else
+installs normally but MetalLB is skipped with a warning; recreate the lab
+to get MetalLB support.
+
+**Verified against a real cluster:** a full `taloslab create` run (Cilium,
+CoreDNS, and all five standard add-ons) has been confirmed working
+end-to-end — both nodes `Ready`, every addon pod `Running`, `ingress-nginx`
+actually getting a MetalLB-assigned `EXTERNAL-IP`, and a `NetworkPolicy`
+actually blocking traffic it should block (the reason for swapping off
+Flannel in the first place). Getting there surfaced three real, non-obvious
+issues along the way: Cilium's default chart values request a capability
+(`SYS_MODULE`) Talos's kernel doesn't support; the CNI install needed a
+retry around the apiserver's brief post-bootstrap unreachability; and the
+MetalLB ordering/Pod-Security fixes described above. All three are already
+fixed in `addons.yaml`/the installer itself — nothing you need to do.
 
 ---
 
@@ -510,7 +602,8 @@ Bootstrap succeeded and the API server came up, but not every expected
 node joined and went `Ready` within the timeout (~3 min). Check what's
 actually happening on the slow node — this is often a node that's still
 booting (check `virsh console`, same as the DHCP-timeout entry above) or
-a networking issue between nodes (flannel/CNI pods stuck). `kubectl get
+a networking issue between nodes (Cilium pods stuck — check `cni_installed`
+in `taloslab status`). `kubectl get
 nodes`/`get pods -A` against the lab's kubeconfig
 (`~/.talos-lab/<lab>/kubeconfig`) will show which node(s) are missing or
 NotReady.
@@ -526,10 +619,10 @@ adding it. Re-check with `virsh -c qemu:///system list`.
 - Single control-plane node only (no HA control plane yet) — this is
   separate from `--single-node` (section 4c), which is about one VM
   serving both roles, not about control-plane redundancy.
-- Kubernetes addon installation (`metrics-server`, `ingress-nginx`,
-  `cert-manager`, etc.) is tracked in state (`addons_installed`) but not
-  yet wired up — install manually via `kubectl`/`helm` against the lab's
-  context for now.
+- The standard add-on complement (section 6a) is a fixed list
+  (metrics-server, cert-manager, kube-state-metrics, ingress-nginx,
+  MetalLB) — there's no way to add a wholly different addon to the
+  prompted/toggleable set without editing `addons.yaml` by hand.
 - Memory pressure protection (section 4a) only checks whether another
   lab's VMs are running, not actual host memory usage or whether the
   profiles chosen would actually fit — it's a nudge, not a capacity check.

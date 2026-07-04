@@ -59,6 +59,16 @@ class VirshError(TalosLabError):
         self.returncode = returncode
 
 
+class AddonInstallError(TalosLabError):
+    def __init__(self, command: list[str], returncode: int, detail: str = ""):
+        message = f"helm {' '.join(command)} failed with exit code {returncode}"
+        if detail:
+            message += f": {detail}"
+        super().__init__(message)
+        self.command = command
+        self.returncode = returncode
+
+
 class ClusterNotReadyError(TalosLabError):
     def __init__(self, expected_count: int, timeout_seconds: int):
         super().__init__(

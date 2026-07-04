@@ -8,6 +8,7 @@ REGISTRY_FILE = ROOT / "registry.json"
 VERSION_FILE = ROOT / "version.json"
 TEMPLATES_DIR = ROOT / "templates"
 VM_PROFILES_FILE = TEMPLATES_DIR / "vm-profiles.yaml"
+ADDONS_FILE = TEMPLATES_DIR / "addons.yaml"
 IMAGES_DIR = ROOT / "images"
 
 KUBE_CONFIG = Path.home() / ".kube" / "config"

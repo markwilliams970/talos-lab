@@ -20,6 +20,14 @@ from talos_lab.exceptions import DhcpLeaseTimeoutError, NetworkPoolExhaustedErro
 POOL_BASE = "10.10"
 MAX_SUBNETS = 256  # 10.10.0.0/16 split into /24s
 
+# Each lab's /24 is split so MetalLB (see addons.py) always has a static
+# range that libvirt's DHCP server will never hand to a VM: .1 gateway,
+# .2-.199 DHCP (far more than any lab's realistic node count), .200-.250
+# reserved for MetalLB's L2Advertisement pool, .251-.254 left unused as a
+# buffer. This only affects labs created after this split existed --
+# already-provisioned labs keep whatever DHCP range Terraform actually
+# applied for them.
+
 
 @dataclass
 class LabNetwork:
@@ -29,6 +37,11 @@ class LabNetwork:
     gateway: str
     dhcp_start: str
     dhcp_end: str
+    # None only for labs registered before the MetalLB pool split existed
+    # -- their real Terraform-applied DHCP range still spans the whole
+    # /24, so there's no static range left to hand MetalLB safely.
+    metallb_pool_start: str | None
+    metallb_pool_end: str | None
 
 
 def allocate_network(lab_name: str) -> LabNetwork:
@@ -41,7 +54,9 @@ def allocate_network(lab_name: str) -> LabNetwork:
                 cidr=f"{POOL_BASE}.{index}.0/24",
                 gateway=f"{POOL_BASE}.{index}.1",
                 dhcp_start=f"{POOL_BASE}.{index}.2",
-                dhcp_end=f"{POOL_BASE}.{index}.254",
+                dhcp_end=f"{POOL_BASE}.{index}.199",
+                metallb_pool_start=f"{POOL_BASE}.{index}.200",
+                metallb_pool_end=f"{POOL_BASE}.{index}.250",
             )
     raise NetworkPoolExhaustedError()
 
