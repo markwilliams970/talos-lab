@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-talos-lab = "talos_lab.cli:main"
+taloslab = "talos_lab.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["talos_lab"]

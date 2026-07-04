@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Uninstalls talos-lab:
-#   - removes the ~/.local/bin/talos-lab symlink
+#   - removes the ~/.local/bin/taloslab symlink
 #   - removes the venv + package under
 #     ${XDG_DATA_HOME:-~/.local/share}/talos-lab
 #
@@ -13,7 +13,7 @@ set -euo pipefail
 
 TALOS_LAB_HOME="${HOME}/.talos-lab"
 INSTALL_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/talos-lab"
-BIN_LINK="${HOME}/.local/bin/talos-lab"
+BIN_LINK="${HOME}/.local/bin/taloslab"
 
 PURGE_DATA=0
 ASSUME_YES=0
@@ -30,7 +30,7 @@ Usage: $(basename "$0") [--purge-data] [--yes]
                  per-lab tofu/talos state, golden images). DESTRUCTIVE --
                  if you still have provisioned labs, their VMs/networks
                  are orphaned in libvirt with nothing left tracking them.
-                 Run 'talos-lab delete <name>' for each lab first.
+                 Run 'taloslab delete <name>' for each lab first.
   --yes, -y      Don't prompt for confirmation. Only affects --purge-data;
                  removing the executable/venv never prompts.
 EOF
@@ -60,7 +60,7 @@ except Exception:
     if [ -n "${labs}" ]; then
         warn "the following labs are still registered:"
         while IFS= read -r lab; do warn "  - ${lab}"; done <<<"${labs}"
-        warn "run 'talos-lab delete <name>' for each before uninstalling, or their"
+        warn "run 'taloslab delete <name>' for each before uninstalling, or their"
         warn "VMs/networks will keep running in libvirt with nothing tracking them."
     fi
 fi

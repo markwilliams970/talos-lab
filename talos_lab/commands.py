@@ -149,7 +149,7 @@ def create_lab(
                 console.print(free_output.stdout)
                 if not Confirm.ask(f"Provision '{name}' anyway?", default=False):
                     console.print(
-                        "aborted -- VMs not provisioned. Re-run `talos-lab create` to resume."
+                        "aborted -- VMs not provisioned. Re-run `taloslab create` to resume."
                     )
                     return
 
@@ -381,7 +381,7 @@ def _require_provisioned(name: str) -> dict:
     if not state.lab_exists(name):
         raise LabNotFoundError(name)
     if not state.load_lab_state(name)["tofu_state_done"]:
-        raise TalosLabError(f"lab '{name}' has no provisioned VMs yet -- run `talos-lab create` first")
+        raise TalosLabError(f"lab '{name}' has no provisioned VMs yet -- run `taloslab create` first")
     return state.get_lab_meta(name)
 
 

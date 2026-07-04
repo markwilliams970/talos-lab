@@ -3,7 +3,7 @@
 #   - creates + seeds ~/.talos-lab (lab data root)
 #   - installs the package into an isolated venv under
 #     ${XDG_DATA_HOME:-~/.local/share}/talos-lab/venv
-#   - links the `talos-lab` executable into ~/.local/bin
+#   - links the `taloslab` executable into ~/.local/bin
 #
 # Safe to re-run: reuses an existing venv and just upgrades the package.
 set -euo pipefail
@@ -66,8 +66,8 @@ info "installing talos-lab into the virtualenv"
 # --- expose the executable ---------------------------------------------------
 
 mkdir -p "${BIN_DIR}"
-ln -sf "${VENV_DIR}/bin/talos-lab" "${BIN_DIR}/talos-lab"
-info "linked ${BIN_DIR}/talos-lab -> ${VENV_DIR}/bin/talos-lab"
+ln -sf "${VENV_DIR}/bin/taloslab" "${BIN_DIR}/taloslab"
+info "linked ${BIN_DIR}/taloslab -> ${VENV_DIR}/bin/taloslab"
 
 case ":${PATH}:" in
     *":${BIN_DIR}:"*) ;;
@@ -81,7 +81,7 @@ esac
 # --- seed default config (version.json, vm-profiles.yaml) -------------------
 
 info "seeding default config in ${TALOS_LAB_HOME}"
-"${VENV_DIR}/bin/talos-lab" version show >/dev/null
+"${VENV_DIR}/bin/taloslab" version show >/dev/null
 
 # --- check external tool dependencies (non-fatal) ----------------------------
 
@@ -95,7 +95,7 @@ for tool in virsh tofu talosctl kubectl qemu-img curl zstd xz; do
         missing=1
     fi
 done
-[ "${missing}" -eq 0 ] || warn "missing tools above -- see README.md prerequisites before running 'talos-lab create'"
+[ "${missing}" -eq 0 ] || warn "missing tools above -- see README.md prerequisites before running 'taloslab create'"
 
 echo
-info "done. Try: talos-lab --help"
+info "done. Try: taloslab --help"

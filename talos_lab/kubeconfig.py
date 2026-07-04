@@ -114,7 +114,7 @@ def wait_for_nodes_ready(
 
 
 def get_node_statuses(kubeconfig_path: Path, timeout_seconds: int = 10) -> list[dict] | None:
-    """Single-shot check for `talos-lab status` -- unlike wait_for_nodes_ready,
+    """Single-shot check for `taloslab status` -- unlike wait_for_nodes_ready,
     this never polls/blocks. Returns None (not an exception) if the API
     server isn't reachable at all right now (VMs stopped, still booting,
     kubeconfig not written yet, ...) since `status` must degrade

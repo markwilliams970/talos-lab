@@ -29,7 +29,7 @@ def domain_state(domain: str) -> str:
 
 
 def domain_state_or_none(domain: str) -> str | None:
-    """Like domain_state(), but for `talos-lab status` -- callers there
+    """Like domain_state(), but for `taloslab status` -- callers there
     need to distinguish "not created yet" (a normal, expected state at
     early bootstrap stages) from an actual virsh error, without raising.
     """

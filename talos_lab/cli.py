@@ -13,7 +13,7 @@ from talos_lab import commands
 from talos_lab.exceptions import TalosLabError
 
 app = typer.Typer(
-    name="talos-lab",
+    name="taloslab",
     help="Thin orchestration CLI over OpenTofu + libvirt + Talos Linux",
     pretty_exceptions_enable=False,
 )

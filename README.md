@@ -22,13 +22,13 @@ Install these on the Linux host before touching talos-lab:
 | [terraform-provider-libvirt](https://github.com/dmacvicar/terraform-provider-libvirt) | libvirt resources for OpenTofu | auto-installed by `tofu init` |
 | [talosctl](https://www.talos.dev/latest/talos-guides/install/talosctl/) | generates configs, bootstraps the cluster | `talosctl version --client` |
 | kubectl | cluster validation, kubeconfig merge | `kubectl version --client` |
-| curl | used by `talos-lab get` to download the golden image | `curl --version` |
-| zstd, xz | used by `talos-lab get` to decompress the golden image (different Talos releases use different compression — talos-lab tries both) | `zstd --version`, `xz --version` |
+| curl | used by `taloslab get` to download the golden image | `curl --version` |
+| zstd, xz | used by `taloslab get` to decompress the golden image (different Talos releases use different compression — talos-lab tries both) | `zstd --version`, `xz --version` |
 | qemu-img | converts the Talos disk image to qcow2 | `qemu-img --version` |
 | Python 3.10+ | runs talos-lab itself | `python3 --version` |
 
-**Install `talosctl` before running `talos-lab` for the first time.**
-`talos-lab` seeds its Talos-version pin (section 3a) by reading `talosctl
+**Install `talosctl` before running `taloslab` for the first time.**
+`taloslab` seeds its Talos-version pin (section 3a) by reading `talosctl
 version --client` and matching it — this matters more than it sounds
 like it should. See the callout in section 3a for why.
 
@@ -64,7 +64,7 @@ git clone <this repo> talos-lab && cd talos-lab
 
 This creates `~/.talos-lab` (lab data), installs talos-lab into an isolated
 venv under `~/.local/share/talos-lab/venv`, and symlinks the executable to
-`~/.local/bin/talos-lab`. It's safe to re-run — it reuses the existing venv
+`~/.local/bin/taloslab`. It's safe to re-run — it reuses the existing venv
 and just upgrades the package. If `~/.local/bin` isn't already on your
 `PATH`, the script tells you what to add to your shell profile. At the end
 it prints a checklist of the external tools from section 1 it found (or
@@ -76,7 +76,7 @@ didn't) on `PATH`.
 git clone <this repo> talos-lab && cd talos-lab
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
-talos-lab --help
+taloslab --help
 ```
 
 ### Uninstalling
@@ -87,11 +87,11 @@ talos-lab --help
 ./uninstall.sh --purge-data --yes   # same, without the prompt
 ```
 
-By default `uninstall.sh` only removes the `~/.local/bin/talos-lab` symlink
+By default `uninstall.sh` only removes the `~/.local/bin/taloslab` symlink
 and the venv — it deliberately leaves `~/.talos-lab` (registry, per-lab
 state, golden images) in place, since that's the only record of how to
 cleanly tear down any VMs/networks you've already provisioned. If you still
-have labs registered, it prints their names and tells you to `talos-lab
+have labs registered, it prints their names and tells you to `taloslab
 delete` them first; deleting `~/.talos-lab` while VMs still exist orphans
 them in libvirt with nothing left tracking them. Pass `--purge-data` once
 you're sure, which still prompts for confirmation unless you add `--yes`.
@@ -102,7 +102,7 @@ you're sure, which still prompts for confirmation unless you add `--yes`.
 
 All labs share **one** Talos version and **one** disk image (`version.json`
 + `~/.talos-lab/images/`). You must fetch that image once per Talos version
-before your first `talos-lab create`.
+before your first `taloslab create`.
 
 talos-lab boots VMs directly from a pre-built disk image (no PXE/ISO install
 step), so it needs the **metal raw disk image**, not the installer ISO.
@@ -110,16 +110,16 @@ step), so it needs the **metal raw disk image**, not the installer ISO.
 ### 3a. Pick a Talos version
 
 ```bash
-talos-lab version show   # first run seeds this automatically — see below
+taloslab version show   # first run seeds this automatically — see below
 ```
 
-The **first time** you run any talos-lab command, it pins the Talos
+The **first time** you run any taloslab command, it pins the Talos
 version to whatever `talosctl version --client` reports on your machine —
 you don't need to set it yourself for a normal setup. To pin something
 else explicitly:
 
 ```bash
-talos-lab version set v1.13.5
+taloslab version set v1.13.5
 ```
 
 > **Why the version pin matters more than it looks like it should:** a
@@ -134,14 +134,14 @@ talos-lab version set v1.13.5
 > doesn't fail loudly, it surfaces later as a cascade of `Unauthorized`
 > errors between kubelet, apiserver, and scheduler well after `create`
 > reports success. If you ever see that, the fix is matching the Talos OS
-> version to your installed `talosctl` (`talos-lab version set` + a fresh
-> `talos-lab get`), not chasing the individual auth errors.
+> version to your installed `talosctl` (`taloslab version set` + a fresh
+> `taloslab get`), not chasing the individual auth errors.
 
 ### 3b. Fetch the image
 
 ```bash
-talos-lab get           # fetches whatever version is currently pinned
-talos-lab get v1.13.5   # or fetch a specific version explicitly ("1.13.5" also works)
+taloslab get           # fetches whatever version is currently pinned
+taloslab get v1.13.5   # or fetch a specific version explicitly ("1.13.5" also works)
 ```
 
 This downloads the `metal-amd64.raw.<ext>` asset from the matching
@@ -159,8 +159,8 @@ overwriting** it (pass `-y`/`--yes` to skip the prompt, e.g. in scripts).
 The write is atomic — if the download or conversion fails partway, the
 existing image (if any) is left untouched.
 
-Repeat whenever you `talos-lab version set` a different Talos version —
-each version gets its own image file alongside the others, and `talos-lab
+Repeat whenever you `taloslab version set` a different Talos version —
+each version gets its own image file alongside the others, and `taloslab
 list` shows you which version each existing lab was actually built with
 (see section 4b).
 
@@ -182,7 +182,7 @@ qemu-img convert -O qcow2 metal-amd64.raw ~/.talos-lab/images/talos-<version>.qc
 
 The [Talos Image Factory](https://factory.talos.dev) is also worth knowing
 about if you need a customized image (e.g. with the `qemu-guest-agent`
-system extension for clean shutdowns under libvirt) — `talos-lab get` only
+system extension for clean shutdowns under libvirt) — `taloslab get` only
 fetches the stock, no-extensions image.
 
 ---
@@ -191,37 +191,37 @@ fetches the stock, no-extensions image.
 
 ```bash
 # 1. confirm the auto-detected version pin (matches your installed talosctl)
-talos-lab version show
+taloslab version show
 
 # 2. fetch the matching image into ~/.talos-lab/images/
-talos-lab get
+taloslab get
 
 # 3. create a lab: 1 control plane + 2 workers
 # (prompts for VM size per role since --cp-profile/--worker-profile
 #  aren't given here -- see section 5)
-talos-lab create demo 2
+taloslab create demo 2
 
 # 4. list labs: VM counts/roles/sizes, Talos version, and active context
-talos-lab list
+taloslab list
 
 # 5. use it
 kubectl get nodes
-talos-lab use demo
+taloslab use demo
 
 # 6. check on it any time -- bootstrap stage, VM status, live cluster readiness
-talos-lab status demo
+taloslab status demo
 
 # 7. power the VMs off/on without destroying the lab
-talos-lab stop demo
-talos-lab start demo
+taloslab stop demo
+taloslab start demo
 
 # 8. tear it down for good
-talos-lab delete demo
+taloslab delete demo
 ```
 
 `create` is resumable — if it fails partway (image missing, DHCP lease
 timeout, a `tofu apply` error), fix the underlying issue and re-run the
-exact same `talos-lab create demo 2`. It picks up from the last completed
+exact same `taloslab create demo 2`. It picks up from the last completed
 stage instead of starting over.
 
 `create` doesn't report "ready" until it's actually confirmed the expected
@@ -239,14 +239,14 @@ touch Terraform state, Talos config, or your kube context. Use them to free
 up host RAM/CPU between sessions without re-provisioning:
 
 ```bash
-talos-lab stop demo            # graceful shutdown (virsh shutdown), waits up to 60s
-talos-lab stop demo --force    # hard power-off (virsh destroy) if a node won't shut down
-talos-lab start demo           # boots the control plane + all workers again
+taloslab stop demo            # graceful shutdown (virsh shutdown), waits up to 60s
+taloslab stop demo --force    # hard power-off (virsh destroy) if a node won't shut down
+taloslab start demo           # boots the control plane + all workers again
 ```
 
 Both commands are idempotent — starting an already-running VM or stopping
 an already-stopped one is a no-op. They require the lab to have been
-provisioned at least once (`talos-lab create`); running them against a lab
+provisioned at least once (`taloslab create`); running them against a lab
 whose VMs don't exist yet raises a clear error telling you to run `create`
 first.
 
@@ -257,13 +257,13 @@ power cycle, but anything that only lived in memory does not.
 
 **Memory pressure warning.** talos-lab is built for a laptop with finite
 RAM (32-64GB, not unlimited), and each lab's VMs are sized independently
-with no awareness of what else is running. Both `talos-lab start` and
-`talos-lab create` check whether another lab already has running VMs
+with no awareness of what else is running. Both `taloslab start` and
+`taloslab create` check whether another lab already has running VMs
 before booting more, and if so, warn you and show real memory numbers
 before asking to continue:
 
 ```
-$ talos-lab start labb
+$ taloslab start labb
 warning: lab(s) already running: laba
 starting another lab increases memory pressure. Current host memory:
                total        used        free      shared  buff/cache   available
@@ -287,16 +287,16 @@ try to guarantee both labs will actually fit.
 
 ## 4b. Listing labs
 
-`talos-lab list` prints one row per lab:
+`taloslab list` prints one row per lab:
 
 ```
    lab    talos    control-plane                workers                    ready
- * demo   v1.7.6   1 x medium (4vCPU/8192MB/40GB)   2 x medium (4vCPU/8192MB/40GB)   yes
+ * demo   v1.13.5   1 x medium (4vCPU/8192MB/40GB)   2 x medium (4vCPU/8192MB/40GB)   yes
 ```
 
 Everything in that row — Talos version, VM counts, roles, and resolved
 CPU/memory/disk — is a **snapshot taken at `create` time**, not a live
-lookup. If you later `talos-lab version set` a different version or edit
+lookup. If you later `taloslab version set` a different version or edit
 `vm-profiles.yaml`, existing labs keep reporting what they were actually
 built with; only the *next* `create` picks up the new values. `*` marks
 whichever lab's context is your current `kubectl` context. A `--single-node`
@@ -307,17 +307,17 @@ a misleading `0 x <profile>`.
 
 ## 4c. Single-node labs
 
-`talos-lab create <name> 1` still creates **two** VMs — a control plane
+`taloslab create <name> 1` still creates **two** VMs — a control plane
 and a worker, unchanged. For a single VM that acts as both, use
 `--single-node` instead of a worker count:
 
 ```bash
-talos-lab create demo --single-node                    # prompts for one VM profile
-talos-lab create demo --single-node --cp-profile large  # skip the prompt
+taloslab create demo --single-node                    # prompts for one VM profile
+taloslab create demo --single-node --cp-profile large  # skip the prompt
 ```
 
 `--single-node` can't be combined with a nonzero worker count (it'll
-error). Unlike a plain `talos-lab create demo 0` — which also produces one
+error). Unlike a plain `taloslab create demo 0` — which also produces one
 VM, but leaves the default Kubernetes control-plane taint in place so
 nothing schedules on it — `--single-node` patches the generated Talos
 config (`cluster.allowSchedulingOnControlPlanes: true`) so the node is
@@ -336,12 +336,12 @@ that doesn't need multiple nodes.
 
 ## 4d. Status
 
-`talos-lab status <name>` reports VM status, bootstrap progress, and live
+`taloslab status <name>` reports VM status, bootstrap progress, and live
 cluster readiness for one lab — and works at any stage, including before
 anything's been provisioned, which is exactly when it's most useful:
 
 ```
-$ talos-lab status demo
+$ taloslab status demo
 demo  talos=v1.13.5  topology=1 control-plane + 2 worker(s)  network=talos-demo
 
 Bootstrap stage:
@@ -369,7 +369,7 @@ If VMs are stopped or a node hasn't joined yet, the cluster section shows
 `unreachable` rather than hanging — this is a single quick check (10s
 timeout), not the same polling wait `create` does.
 
-`talos-lab status-all` runs this for every registered lab, one after
+`taloslab status-all` runs this for every registered lab, one after
 another with a divider between them — useful for a quick "what's running
 right now" sweep across all your labs.
 
@@ -410,7 +410,7 @@ Control-plane profile [small/medium/large] (medium):
 Passing the flag skips the prompt for that role — useful for scripting:
 
 ```bash
-talos-lab create demo 2 --cp-profile large --worker-profile small
+taloslab create demo 2 --cp-profile large --worker-profile small
 ```
 
 ---
@@ -432,9 +432,9 @@ labs:
 
 - All labs merge into the single `~/.kube/config`.
 - Each lab registers a context named `talos-lab-<lab_name>`.
-- `talos-lab create` sets the new lab as your current context.
-- `talos-lab use <name>` switches contexts.
-- `talos-lab delete <name>` removes the cluster/user/context entries and
+- `taloslab create` sets the new lab as your current context.
+- `taloslab use <name>` switches contexts.
+- `taloslab delete <name>` removes the cluster/user/context entries and
   clears `current-context` if it pointed at the deleted lab.
 
 ---
@@ -442,15 +442,15 @@ labs:
 ## 8. Troubleshooting
 
 **`error: Talos image for vX.Y.Z not found at ...`**
-Run `talos-lab get vX.Y.Z` (or `talos-lab get` if that's already your
+Run `taloslab get vX.Y.Z` (or `taloslab get` if that's already your
 pinned version), then re-run `create`.
 
-**`error: failed to download ... (exit 22)` from `talos-lab get`**
+**`error: failed to download ... (exit 22)` from `taloslab get`**
 The asset 404'd — the version tag likely doesn't exist or its asset name
 changed. The error prints the exact URL and release-tag page it tried;
 see section 3c for the manual fallback.
 
-**`error: missing required tool(s) on PATH: ...` from `talos-lab get`**
+**`error: missing required tool(s) on PATH: ...` from `taloslab get`**
 Install whichever of `curl`/`zstd`/`xz`/`qemu-img` is missing (section 1).
 
 **`tofu apply` fails referencing the `default` pool**
@@ -479,8 +479,8 @@ Two specific things to look for in that console output:
 
 **`kubectl`/`talosctl` show `Unauthorized` errors after `create` reports success**
 This is a `talosctl` client vs. Talos OS version mismatch — see the
-callout in section 3a. Fix: `talos-lab version set <version matching your
-talosctl>`, `talos-lab get`, then `talos-lab delete <lab>` and recreate
+callout in section 3a. Fix: `taloslab version set <version matching your
+talosctl>`, `taloslab get`, then `taloslab delete <lab>` and recreate
 (a lab already bootstrapped under mismatched versions can't be repaired
 in place — its PKI material was already generated wrong).
 

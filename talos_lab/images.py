@@ -50,7 +50,7 @@ def ensure_image(talos_version: str) -> Path:
 
     raise ImageNotFoundError(
         f"Talos image for {talos_version} not found at {path}.\n"
-        f"Run `talos-lab get {talos_version}` to fetch it, then re-run `talos-lab create`."
+        f"Run `taloslab get {talos_version}` to fetch it, then re-run `taloslab create`."
     )
 
 
