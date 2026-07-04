@@ -470,6 +470,19 @@ def get_image(version: str | None, assume_yes: bool = False) -> None:
     talos_version = images.normalize_version(version) if version else config.get_talos_version()
     target = images.image_path(talos_version)
 
+    installed_version = config._detect_talosctl_version()
+    if installed_version and installed_version != talos_version:
+        console.print(
+            f"[yellow]warning:[/yellow] installed talosctl is {installed_version}, "
+            f"but fetching an image for {talos_version}. Version drift between the "
+            "talosctl client and the Talos OS image can cause inconsistent results."
+        )
+        if not assume_yes:
+            proceed = Confirm.ask("Proceed anyway?", default=False)
+            if not proceed:
+                console.print("aborted -- no image fetched")
+                return
+
     if target.exists() and not assume_yes:
         overwrite = Confirm.ask(
             f"Image for {talos_version} already exists at {target}. Overwrite?", default=False

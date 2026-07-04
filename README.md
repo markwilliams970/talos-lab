@@ -159,6 +159,12 @@ overwriting** it (pass `-y`/`--yes` to skip the prompt, e.g. in scripts).
 The write is atomic — if the download or conversion fails partway, the
 existing image (if any) is left untouched.
 
+`get` also compares the version you're fetching against your installed
+`talosctl` (`talosctl version --client`). If they differ, it prints a
+warning and asks you to confirm before fetching — see the note above on
+why that skew matters (`-y`/`--yes` skips this prompt too, but the
+warning still prints).
+
 Repeat whenever you `taloslab version set` a different Talos version —
 each version gets its own image file alongside the others, and `taloslab
 list` shows you which version each existing lab was actually built with
