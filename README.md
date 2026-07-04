@@ -18,6 +18,12 @@ section 9 for status.
 
 ## 1. Prerequisites
 
+**Platform requirement: Linux on amd64.** talos-lab's provisioning backend
+is libvirt/KVM, and `taloslab get` only fetches `metal-amd64` Talos images.
+It cannot be installed or run on macOS (or arm64) at present — there is no
+macOS backend and no arm64 image support. See section 9 for the full
+rationale and status of a possible future macOS port.
+
 Install these on the Linux host before touching talos-lab:
 
 | Tool | Purpose | Check |
