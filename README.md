@@ -38,6 +38,7 @@ Install these on the Linux host before touching talos-lab:
 | zstd, xz | used by `taloslab get` to decompress the golden image (different Talos releases use different compression — talos-lab tries both) | `zstd --version`, `xz --version` |
 | qemu-img | converts the Talos disk image to qcow2 | `qemu-img --version` |
 | Python 3.10+ | runs talos-lab itself | `python3 --version` |
+| python3-venv | `install.sh` creates the venv with stdlib `python3 -m venv`; on Debian/Ubuntu this module ships separately from `python3` and is often missing by default | `python3 -m venv --help` |
 
 **Install `talosctl` before running `taloslab` for the first time.**
 `taloslab` seeds its Talos-version pin (section 3a) by reading `talosctl
