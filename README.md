@@ -686,6 +686,18 @@ adding it. Re-check with `virsh -c qemu:///system list`.
 
 ---
 
+## 10. Prior art
+
+Other write-ups and projects covering local Talos/Kubernetes labs, for
+reference:
+
+- [Talos on libvirt/KVM (gist)](https://gist.github.com/cyrenity/67469dce33cf4eb4483486637c06d7be) —
+  a manual walkthrough using `talosctl` and `virsh` to hand-build a cluster.
+- [k8s-talos-local](https://github.com/0xOthmane/k8s-talos-local) — Talos on
+  Docker with an ArgoCD/Cloudflare-tunnel dev stack layered on top.
+
+---
+
 ## License
 
 [MIT](LICENSE)
