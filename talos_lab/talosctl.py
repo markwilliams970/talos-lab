@@ -25,6 +25,58 @@ def _run(args: list[str]) -> subprocess.CompletedProcess:
 
 SINGLE_NODE_CONTROL_PLANE_PATCH = '{"cluster": {"allowSchedulingOnControlPlanes": true}}'
 
+# Talos's own built-in default (verified via `talosctl read
+# .../admission-control-config.yaml` against a real control-plane node)
+# sets enforce=baseline but warn=restricted/audit=restricted, so any pod
+# that merely satisfies baseline (the actual enforced level) still prints
+# a "would violate PodSecurity restricted:latest" warning on every
+# `kubectl run`/`apply`. That's just noise for a local lab -- this lowers
+# warn/audit to match enforce (baseline) so nothing changes about what's
+# actually admitted (enforce itself is untouched, so metallb-system's
+# dedicated privileged-namespace labeling in addons.py is still required
+# and unaffected).
+#
+# CONFIRMED BY BREAKING A REAL CONTROL PLANE, TWICE (once via a live
+# `talosctl patch mc`, once via this exact --config-patch at gen-config
+# time): Talos's config-patch merge is NOT a JSON Merge Patch that
+# replaces arrays wholesale -- for the typed `admissionControl` list it
+# merges list entries by matching `name` (so this patch's single
+# "PodSecurity" entry correctly merges into Talos's own existing one,
+# rather than appending a second plugin entry), but for a plain
+# string-array field *inside* the opaque, untyped `configuration` blob
+# (like `exemptions.namespaces`) it APPENDS the patch's list onto the
+# existing one instead of replacing it. Restating
+# `exemptions.namespaces: ["kube-system"]` here produced
+# `["kube-system", "kube-system"]` on the live node, which the
+# PodSecurity admission plugin hard-rejects as a duplicate at apiserver
+# startup ("PodSecurity invalid: exemptions.namespaces[1]: Duplicate
+# value") -- the apiserver container then exits immediately and never
+# comes back (CrashLoopBackOff), taking the whole control plane down
+# with it. There is no known way to force a list-replace instead of
+# list-append through this patch mechanism, so the only safe fix is to
+# never restate a list field that Talos's own default already
+# populates -- this patch therefore omits `exemptions` entirely and only
+# touches the scalar `defaults.audit`/`defaults.warn` fields.
+PODSECURITY_QUIET_WARNINGS_PATCH: dict = {
+    "cluster": {
+        "apiServer": {
+            "admissionControl": [
+                {
+                    "name": "PodSecurity",
+                    "configuration": {
+                        "apiVersion": "pod-security.admission.config.k8s.io/v1alpha1",
+                        "kind": "PodSecurityConfiguration",
+                        "defaults": {
+                            "audit": "baseline",
+                            "warn": "baseline",
+                        },
+                    },
+                }
+            ]
+        }
+    }
+}
+
 
 def gen_config(
     cluster_name: str,
@@ -58,9 +110,17 @@ def gen_config(
     overrides the image Talos's own (still Talos-managed, not replaced)
     CoreDNS deployment uses -- addons.yaml's `coredns.image` is the only
     thing that sets this.
+
+    Every lab also always applies PODSECURITY_QUIET_WARNINGS_PATCH, lowering
+    the PodSecurity admission plugin's warn/audit levels to match its
+    enforce level (baseline) -- see that constant's comment for why.
+    Enforcement itself is unchanged (still baseline, kube-system still the
+    only exemption), so this only silences noisy warnings on pods that
+    already pass; it does not relax what's actually admitted.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     cluster_patch: dict = {"cluster": {"network": {"cni": {"name": "none"}}}}
+    cluster_patch["cluster"]["apiServer"] = PODSECURITY_QUIET_WARNINGS_PATCH["cluster"]["apiServer"]
     if coredns_image:
         cluster_patch["cluster"]["coreDNS"] = {"image": coredns_image}
     args = [
