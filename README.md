@@ -9,6 +9,11 @@ out to `tofu`, `talosctl`, `virsh`, and `kubectl` for every real
 infrastructure operation. It only owns the bookkeeping: lab state, network
 allocation, and command sequencing.
 
+**Linux/amd64 only, for now.** talos-lab's backend is libvirt/KVM on Linux,
+and `taloslab get`'s image fetch is hardcoded to the `metal-amd64` release
+asset. There's no macOS support and no arm64 image handling yet — see
+section 9 for status.
+
 ---
 
 ## 1. Prerequisites
@@ -616,6 +621,13 @@ adding it. Re-check with `virsh -c qemu:///system list`.
 
 ## 9. Known v1 limitations
 
+- **Linux/amd64 only.** The provisioning backend is libvirt/KVM, and
+  `taloslab get` only fetches the `metal-amd64` release asset — there's no
+  macOS backend and no arm64 image support. A macOS/Lima-based backend has
+  been scoped out in design discussion but is deliberately on hold pending
+  one unresolved question: whether a Talos arm64 metal image actually boots
+  under Lima's `vz` virtualization path on Apple Silicon. Nothing has been
+  built for it yet.
 - Single control-plane node only (no HA control plane yet) — this is
   separate from `--single-node` (section 4c), which is about one VM
   serving both roles, not about control-plane redundancy.
