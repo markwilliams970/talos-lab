@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import subprocess
 from datetime import datetime, timezone
+from pathlib import Path
 
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
@@ -479,4 +480,22 @@ def get_image(version: str | None, assume_yes: bool = False) -> None:
 
     console.print(f"fetching Talos {talos_version} image...")
     path = images.download_image(talos_version)
+    console.print(f"[green]saved {path}[/green]")
+
+
+def put_image(source: str, version: str | None, assume_yes: bool = False) -> None:
+    talos_version = images.normalize_version(version) if version else config.get_talos_version()
+    source_path = Path(source).expanduser()
+    target = images.image_path(talos_version)
+
+    if target.exists() and not assume_yes:
+        overwrite = Confirm.ask(
+            f"Image for {talos_version} already exists at {target}. Overwrite?", default=False
+        )
+        if not overwrite:
+            console.print("aborted -- existing image left in place")
+            return
+
+    console.print(f"copying {source_path} -> {target}...")
+    path = images.import_image(source_path, talos_version)
     console.print(f"[green]saved {path}[/green]")

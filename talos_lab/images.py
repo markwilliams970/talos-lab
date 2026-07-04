@@ -18,6 +18,7 @@ this will fail with the URLs it tried, which is enough to go fix by hand
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -101,6 +102,45 @@ def download_image(talos_version: str) -> Path:
         if result.returncode != 0:
             raise ImageDownloadError(f"failed to convert image to qcow2 (exit {result.returncode})")
 
+        os.replace(qcow2_tmp, target)
+
+    return target
+
+
+def import_image(source: Path, talos_version: str) -> Path:
+    """Copies a manually-downloaded disk image (e.g. from
+    https://factory.talos.dev) from `source` into the local image store
+    for `talos_version`, replacing any existing image for that version.
+    Caller is responsible for confirming any overwrite before calling this.
+    """
+    if not source.is_file():
+        raise ImageDownloadError(f"no such file: {source}")
+
+    if shutil.which("qemu-img") is None:
+        raise ImageDownloadError("missing required tool on PATH: qemu-img")
+
+    result = subprocess.run(
+        ["qemu-img", "info", "--output=json", str(source)],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise ImageDownloadError(
+            f"qemu-img couldn't read {source} (exit {result.returncode}): {result.stderr.strip()}"
+        )
+    actual_format = json.loads(result.stdout).get("format")
+    if actual_format != "qcow2":
+        raise ImageDownloadError(
+            f"{source} is format '{actual_format}', not qcow2 -- convert it first, e.g.:\n"
+            f"  qemu-img convert -O qcow2 {source} {source.with_suffix('.qcow2')}"
+        )
+
+    paths.IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    target = image_path(talos_version)
+
+    with tempfile.TemporaryDirectory(dir=paths.IMAGES_DIR) as tmp:
+        qcow2_tmp = Path(tmp) / "image.qcow2"
+        shutil.copyfile(source, qcow2_tmp)
         os.replace(qcow2_tmp, target)
 
     return target

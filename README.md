@@ -183,7 +183,22 @@ qemu-img convert -O qcow2 metal-amd64.raw ~/.talos-lab/images/talos-<version>.qc
 The [Talos Image Factory](https://factory.talos.dev) is also worth knowing
 about if you need a customized image (e.g. with the `qemu-guest-agent`
 system extension for clean shutdowns under libvirt) — `taloslab get` only
-fetches the stock, no-extensions image.
+fetches the stock, no-extensions image. If you download a qcow2 disk image
+from the Factory (or anywhere else) by hand, use `put` instead of copying
+it into place yourself:
+
+```bash
+taloslab put ~/Downloads/metal-amd64.qcow2 v1.13.5
+```
+
+`put` validates the file is actually qcow2 (via `qemu-img info`) before
+copying it in, prompts before overwriting an existing image for that
+version (pass `-y`/`--yes` to skip), and writes atomically the same way
+`get` does. The version argument is optional and defaults to whatever's
+currently pinned. If the Factory gave you a `.raw`/`.raw.zst` asset
+instead of qcow2, decompress and convert it first (section 3c) — `put`
+will refuse a non-qcow2 file rather than silently storing something that
+won't boot.
 
 ---
 

@@ -120,6 +120,18 @@ def get(
     commands.get_image(version, assume_yes=yes)
 
 
+@app.command()
+def put(
+    image: str = typer.Argument(..., help="Path to a manually-downloaded qcow2 disk image, e.g. from factory.talos.dev"),
+    version: str = typer.Argument(
+        None, help="Talos version this image is for, e.g. 1.8.0 or v1.8.0. Defaults to the pinned version."
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Overwrite an existing image without prompting"),
+) -> None:
+    """Import a manually-downloaded qcow2 image into ~/.talos-lab/images."""
+    commands.put_image(image, version, assume_yes=yes)
+
+
 def main() -> None:
     try:
         app()
