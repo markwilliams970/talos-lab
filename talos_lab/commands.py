@@ -522,6 +522,37 @@ def stop_lab(name: str, force: bool = False) -> None:
     console.print(f"[green]lab '{name}' stopped[/green]")
 
 
+def stop_all_labs(force: bool = False) -> None:
+    """Stop every registered lab's VMs, one after another -- e.g. before
+    suspending a laptop, since host suspend freezes VMs in place rather
+    than shutting them down cleanly (see README section 4a). Mirrors
+    show_status_all()'s per-lab isolation: one lab failing to stop (or
+    not being provisioned yet) doesn't stop the rest from being
+    attempted, but a failure anywhere is still surfaced via a nonzero
+    exit so a pre-suspend script can tell not everything actually
+    stopped.
+    """
+    lab_names = list(state.load_registry()["labs"].keys())
+
+    if not lab_names:
+        console.print("no labs registered")
+        return
+
+    failures = []
+    for lab_name in lab_names:
+        if not state.load_lab_state(lab_name)["tofu_state_done"]:
+            console.print(f"[bold]{lab_name}[/bold]: skipping (not provisioned yet)")
+            continue
+        try:
+            stop_lab(lab_name, force=force)
+        except TalosLabError as e:
+            failures.append(lab_name)
+            console.print(f"[red]error stopping '{lab_name}':[/red] {e}")
+
+    if failures:
+        raise TalosLabError(f"failed to stop: {', '.join(failures)}")
+
+
 def delete_lab(name: str) -> None:
     if not state.lab_exists(name):
         raise LabNotFoundError(name)

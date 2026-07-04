@@ -277,6 +277,26 @@ provisioned at least once (`taloslab create`); running them against a lab
 whose VMs don't exist yet raises a clear error telling you to run `create`
 first.
 
+`taloslab stop-all` runs `stop` against every registered lab, one after
+another — **run this before suspending the laptop or closing the lid.**
+Host suspend doesn't gracefully shut a VM down; it just freezes the QEMU
+process mid-instruction along with the rest of the host and resumes it
+later, with no ACPI signal to the guest. The guest's clock doesn't advance
+during that window, and etcd/Kubernetes both lean on wall-clock heartbeat
+and lease timeouts, so a real suspend can trigger raft elections (or worse
+on a long suspend) on resume. `stop` first avoids all of that:
+
+```bash
+taloslab stop-all             # graceful shutdown of every lab
+taloslab stop-all --force     # hard power-off of every lab
+```
+
+Labs not yet provisioned are skipped (printed, not an error). Each lab is
+attempted independently — one lab failing to stop doesn't block the
+others — but if any lab failed, `stop-all` exits non-zero after
+attempting all of them, so a pre-suspend script can detect that it's not
+safe to suspend yet.
+
 Note that Talos VMs mount their root filesystem read-only with ephemeral
 state by default, so a `stop`/`start` cycle behaves like a reboot from the
 cluster's perspective — etcd and kubelet state on disk persist across the

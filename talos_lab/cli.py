@@ -81,6 +81,14 @@ def stop(
     commands.stop_lab(name, force=force)
 
 
+@app.command(name="stop-all")
+def stop_all(
+    force: bool = typer.Option(False, "--force", help="Hard power-off (virsh destroy) instead of a graceful shutdown"),
+) -> None:
+    """Power off every registered lab's VMs -- e.g. before suspending the host."""
+    commands.stop_all_labs(force=force)
+
+
 @app.command()
 def delete(name: str = typer.Argument(..., help="Lab name")) -> None:
     """Tear down a lab's VMs, network, state, and kube context."""
