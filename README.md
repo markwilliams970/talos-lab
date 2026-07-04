@@ -591,6 +591,79 @@ fixed in `addons.yaml`/the installer itself — nothing you need to do.
 
 ---
 
+## 6b. Security
+
+**If you're coming from a managed cloud offering like GKE, expect this
+cluster to feel stricter out of the box.** Every lab runs with Talos
+Linux's built-in [Pod Security Admission](https://kubernetes.io/docs/concepts/security/pod-security-admission/)
+(PSA) enforcement active, unconditionally, from the moment the cluster
+exists.
+
+Kubernetes's PSA controller checks pods against three standard levels:
+`privileged` (no restrictions), `baseline` (blocks known
+privilege-escalation paths — `privileged: true`, `hostNetwork`/`hostPID`/
+`hostIPC`, `hostPath` volumes, dangerous capabilities like `SYS_ADMIN`/
+`NET_ADMIN`), and `restricted` (baseline plus requiring `runAsNonRoot`,
+dropped capabilities, `allowPrivilegeEscalation: false`, an explicit
+`seccompProfile`). Each level has independent `enforce` (reject),
+`audit` (log), and `warn` (client warning) modes.
+
+Talos's own default, unconditionally applied to every namespace except
+`kube-system`:
+
+```yaml
+enforce: baseline    # actually rejects violating pods
+audit:   baseline    # talos-lab lowers this from Talos's own "restricted"
+warn:    baseline    # talos-lab lowers this from Talos's own "restricted"
+```
+
+**Why stricter than GKE:** this is a genuine philosophy difference, not
+an oversight on either side. Talos's whole pitch is a minimal, immutable,
+API-driven OS that's secure by default — no shell, no package manager,
+and (as part of that same posture) PSA enforcement baked in
+unconditionally. GKE Standard mode takes the opposite stance: the PSA
+controller is present but enforces nothing by default — you must
+explicitly label a namespace to opt into `baseline`/`restricted`. GKE
+serves a huge range of pre-existing customer workloads that predate PSA,
+so defaulting to enforcement there would break clusters on creation; GKE
+leaves that decision to the platform team. (GKE **Autopilot** is the
+exception — closer in spirit to Talos's default.) Neither is "wrong" —
+they're just optimizing for different things: turnkey compatibility vs.
+turnkey hardening.
+
+**What this means in practice:** `enforce: baseline` is what actually
+matters — `audit`/`warn` never block anything, they only produce log
+lines or a client-side warning (which is what talos-lab silences by
+lowering them to match `enforce`, since it was pure noise for a local
+lab). Baseline itself is permissive for ordinary application workloads —
+web servers, databases, batch jobs, anything that doesn't touch the host
+— those need zero changes. What **does** get hard-rejected (a real `403
+Forbidden`, not a warning) in any namespace other than `kube-system`:
+anything needing `hostNetwork`/`hostPID`/`hostPath`/privileged mode or
+dangerous capabilities — CNI plugins, node-level monitoring/log
+collector DaemonSets (Prometheus's `node-exporter`, Fluentd/Fluent Bit),
+some CSI storage node plugins, privileged CI runners doing
+Docker-in-Docker.
+
+talos-lab already hits this once, in-tree: MetalLB's `speaker` DaemonSet
+needs `hostNetwork`/`hostPort`/`NET_ADMIN` for L2 announcement, so
+`create` labels the `metallb-system` namespace
+`pod-security.kubernetes.io/enforce=privileged` *before* installing it
+(section 6a). If you deploy something similar yourself (a log collector,
+`node-exporter`, etc.), apply the same pattern to its namespace *before*
+installing — a DaemonSet controller won't retroactively retry pods that
+were already rejected once you relabel after the fact:
+
+```bash
+kubectl create namespace <ns>
+kubectl label namespace <ns> \
+  pod-security.kubernetes.io/enforce=privileged \
+  pod-security.kubernetes.io/audit=privileged \
+  pod-security.kubernetes.io/warn=privileged
+```
+
+---
+
 ## 7. Kubeconfig behavior
 
 - All labs merge into the single `~/.kube/config`.
