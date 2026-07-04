@@ -18,6 +18,164 @@ info() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33mwarn:\033[0m %s\n' "$*" >&2; }
 fail() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# --- --install-dependencies mode ---------------------------------------------
+#
+# Installs the external tools talos-lab shells out to (README.md
+# prerequisites) and exits -- does NOT install talos-lab itself.
+#
+# Split deliberately in two:
+#   - plain system packages (virsh/libvirt, qemu-img, curl, zstd, xz) are
+#     auto-installed via whatever package manager is detected
+#   - tofu/talosctl/kubectl/helm are NEVER auto-installed: these are
+#     version-sensitive (see TALOS VERSIONING MODEL in CLAUDE.md -- a
+#     talosctl newer than the pinned Talos OS version causes silent
+#     Unauthorized failures well after a "successful" bootstrap) and each
+#     have their own official installers. We only print where to get them.
+
+PKG_TOOLS=(virsh qemu-img curl zstd xz)
+MANUAL_TOOLS=(tofu talosctl kubectl helm)
+
+detect_pkg_manager() {
+    if command -v apt-get >/dev/null 2>&1; then echo apt
+    elif command -v dnf >/dev/null 2>&1; then echo dnf
+    elif command -v pacman >/dev/null 2>&1; then echo pacman
+    else echo none
+    fi
+}
+
+# Echoes the package name(s) providing $2 (a talos-lab dependency tool) on
+# package manager $1, or nothing if the mapping isn't known.
+pkg_name_for() {
+    case "$1:$2" in
+        apt:virsh) echo "libvirt-clients libvirt-daemon-system" ;;
+        apt:qemu-img) echo "qemu-utils" ;;
+        apt:curl) echo "curl" ;;
+        apt:zstd) echo "zstd" ;;
+        apt:xz) echo "xz-utils" ;;
+        dnf:virsh) echo "libvirt-client libvirt-daemon-kvm" ;;
+        dnf:qemu-img) echo "qemu-img" ;;
+        dnf:curl) echo "curl" ;;
+        dnf:zstd) echo "zstd" ;;
+        dnf:xz) echo "xz" ;;
+        pacman:virsh) echo "libvirt" ;;
+        pacman:qemu-img) echo "qemu-img" ;;
+        pacman:curl) echo "curl" ;;
+        pacman:zstd) echo "zstd" ;;
+        pacman:xz) echo "xz" ;;
+        *) echo "" ;;
+    esac
+}
+
+manual_tool_url() {
+    case "$1" in
+        tofu) echo "https://opentofu.org/docs/intro/install/" ;;
+        talosctl) echo "https://www.talos.dev/latest/talos-guides/install/talosctl/" ;;
+        kubectl) echo "https://kubernetes.io/docs/tasks/tools/#kubectl" ;;
+        helm) echo "https://helm.sh/docs/intro/install/" ;;
+    esac
+}
+
+install_dependencies() {
+    local pm to_install tool pkg packages install_cmd reply
+    pm="$(detect_pkg_manager)"
+
+    to_install=()
+    for tool in "${PKG_TOOLS[@]}"; do
+        command -v "${tool}" >/dev/null 2>&1 || to_install+=("${tool}")
+    done
+
+    if [ "${#to_install[@]}" -eq 0 ]; then
+        info "all package-manager-installable dependencies already present"
+    elif [ "${pm}" = "none" ]; then
+        warn "no supported package manager found (apt-get/dnf/pacman) -- install manually: ${to_install[*]}"
+    else
+        packages=()
+        for tool in "${to_install[@]}"; do
+            pkg="$(pkg_name_for "${pm}" "${tool}")"
+            if [ -z "${pkg}" ]; then
+                warn "don't know the ${pm} package name for ${tool} -- install it manually"
+                continue
+            fi
+            # shellcheck disable=SC2206
+            packages+=(${pkg})
+        done
+
+        if [ "${#packages[@]}" -gt 0 ]; then
+            case "${pm}" in
+                apt) install_cmd=(sudo apt-get install -y "${packages[@]}") ;;
+                dnf) install_cmd=(sudo dnf install -y "${packages[@]}") ;;
+                pacman) install_cmd=(sudo pacman -S --needed "${packages[@]}") ;;
+            esac
+            info "about to run:"
+            echo "  ${install_cmd[*]}"
+            if [ "${ASSUME_YES}" -ne 1 ]; then
+                read -r -p "Proceed? [y/N] " reply
+                case "${reply}" in
+                    [yY]|[yY][eE][sS]) ;;
+                    *) info "skipped package install"; packages=() ;;
+                esac
+            fi
+            if [ "${#packages[@]}" -gt 0 ]; then
+                "${install_cmd[@]}" || warn "package install failed -- see output above"
+            fi
+        fi
+    fi
+
+    echo
+    info "the following are version-sensitive and never auto-installed -- see"
+    info "README.md prerequisites for why, install yourself if missing:"
+    for tool in "${MANUAL_TOOLS[@]}"; do
+        if command -v "${tool}" >/dev/null 2>&1; then
+            printf '  [ok]      %s\n' "${tool}"
+        else
+            printf '  [missing] %-10s %s\n' "${tool}" "$(manual_tool_url "${tool}")"
+        fi
+    done
+}
+
+INSTALL_DEPENDENCIES=0
+ASSUME_YES=0
+for arg in "$@"; do
+    case "${arg}" in
+        --install-dependencies) INSTALL_DEPENDENCIES=1 ;;
+        --yes|-y) ASSUME_YES=1 ;;
+        --help|-h)
+            cat <<EOF
+Usage: $(basename "$0") [--install-dependencies] [--yes]
+
+  --install-dependencies  Install the external tools talos-lab shells out
+                          to (see README.md prerequisites) and exit --
+                          does not install talos-lab itself. Packages
+                          installable via apt/dnf/pacman (virsh, qemu-img,
+                          curl, zstd, xz) are installed automatically;
+                          version-sensitive tools (tofu, talosctl,
+                          kubectl, helm) are never auto-installed -- their
+                          official install links are printed instead. Run
+                          this first, then re-run '$(basename "$0")' with
+                          no flags to install talos-lab itself.
+  --yes, -y               Don't prompt before running the package manager
+                          install command. Only affects
+                          --install-dependencies.
+EOF
+            exit 0
+            ;;
+        *) fail "unknown option: ${arg} (see --help)" ;;
+    esac
+done
+
+if [ "${INSTALL_DEPENDENCIES}" -eq 1 ]; then
+    UNAME_S="$(uname -s)"
+    UNAME_M="$(uname -m)"
+    case "${UNAME_S}/${UNAME_M}" in
+        Linux/x86_64|Linux/amd64) ;;
+        *) fail "talos-lab only supports Linux/amd64 (detected ${UNAME_S}/${UNAME_M})" ;;
+    esac
+    install_dependencies
+    echo
+    info "done. Re-run '$(basename "$0")' with no flags to install talos-lab itself."
+    exit 0
+fi
+
 # --- sanity checks ----------------------------------------------------------
 
 UNAME_S="$(uname -s)"

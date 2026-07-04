@@ -45,6 +45,20 @@ Install these on the Linux host before touching talos-lab:
 version --client` and matching it — this matters more than it sounds
 like it should. See the callout in section 3a for why.
 
+To install the plain system packages from the table above (KVM/libvirt,
+qemu-img, curl, zstd, xz) automatically via your distro's package manager
+(apt/dnf/pacman), run:
+
+```bash
+./install.sh --install-dependencies
+```
+
+This only installs those five — not talos-lab itself, and not
+OpenTofu/talosctl/kubectl/Helm. Those four are deliberately left out:
+they're version-sensitive (see section 3a), each has its own official
+installer, and this command just prints where to get them instead of
+guessing a version for you.
+
 Make sure your user can talk to libvirt without `sudo`:
 
 ```bash
@@ -81,7 +95,8 @@ venv under `~/.local/share/talos-lab/venv`, and symlinks the executable to
 and just upgrades the package. If `~/.local/bin` isn't already on your
 `PATH`, the script tells you what to add to your shell profile. At the end
 it prints a checklist of the external tools from section 1 it found (or
-didn't) on `PATH`.
+didn't) on `PATH`. Missing tools? See `./install.sh --install-dependencies`
+in section 1.
 
 ### Option B: manual dev install (editable, for working on talos-lab itself)
 
