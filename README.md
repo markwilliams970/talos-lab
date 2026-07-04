@@ -239,6 +239,9 @@ taloslab list
 
 # 5. use it
 kubectl get nodes
+kubectl get pods --all-namespaces
+kubectl run hello-world --restart=Never --image=hello-world -it
+kubectl delete pod hello-world
 taloslab use demo
 
 # 6. check on it any time -- bootstrap stage, VM status, live cluster readiness
