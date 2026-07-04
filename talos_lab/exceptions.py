@@ -76,3 +76,12 @@ class ClusterNotReadyError(TalosLabError):
         )
         self.expected_count = expected_count
         self.timeout_seconds = timeout_seconds
+
+
+class UnsupportedPlatformError(TalosLabError):
+    def __init__(self, system: str, machine: str):
+        super().__init__(
+            f"talos-lab only supports Linux/amd64 (detected {system}/{machine})"
+        )
+        self.system = system
+        self.machine = machine

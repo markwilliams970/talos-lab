@@ -20,6 +20,13 @@ fail() { printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; exit 1; }
 
 # --- sanity checks ----------------------------------------------------------
 
+UNAME_S="$(uname -s)"
+UNAME_M="$(uname -m)"
+case "${UNAME_S}/${UNAME_M}" in
+    Linux/x86_64|Linux/amd64) ;;
+    *) fail "talos-lab only supports Linux/amd64 (detected ${UNAME_S}/${UNAME_M})" ;;
+esac
+
 [ -f "${SCRIPT_DIR}/pyproject.toml" ] || fail "run this script from inside the talos-lab repo (pyproject.toml not found next to it)"
 
 command -v python3 >/dev/null 2>&1 || fail "python3 not found on PATH"

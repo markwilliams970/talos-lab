@@ -4,13 +4,14 @@ subclasses turn into clean exit(1) messages."""
 
 from __future__ import annotations
 
+import platform
 import sys
 
 import typer
 from rich.console import Console
 
 from talos_lab import commands
-from talos_lab.exceptions import TalosLabError
+from talos_lab.exceptions import TalosLabError, UnsupportedPlatformError
 
 app = typer.Typer(
     name="taloslab",
@@ -21,6 +22,22 @@ version_app = typer.Typer(help="Manage the global Talos version pin")
 app.add_typer(version_app, name="version")
 
 console = Console()
+
+# talos-lab shells out to libvirt/OpenTofu/talosctl and fetches amd64-only
+# golden images (see images.py) -- a non-Linux or non-amd64 host can have
+# every one of those tools installed (tofu and talosctl both ship real
+# macOS/arm64 builds) and get partway into a command before failing with a
+# confusing downstream error instead of a clear one. Check up front, once,
+# before any subcommand runs.
+_SUPPORTED_MACHINES = {"x86_64", "amd64"}
+
+
+@app.callback()
+def _check_platform() -> None:
+    system = platform.system()
+    machine = platform.machine()
+    if system != "Linux" or machine not in _SUPPORTED_MACHINES:
+        raise UnsupportedPlatformError(system, machine)
 
 
 @app.command()
