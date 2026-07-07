@@ -77,6 +77,42 @@ PODSECURITY_QUIET_WARNINGS_PATCH: dict = {
     }
 }
 
+# --permissive's counterpart to PODSECURITY_QUIET_WARNINGS_PATCH above --
+# read that constant's comment first, the same "only restate scalar
+# fields, never a list field like exemptions.namespaces" constraint
+# applies here too (this patch omits `exemptions` for the same reason).
+#
+# `defaults.enforce/audit/warn: privileged` matches GKE Standard's actual
+# default posture: the PodSecurity admission plugin is present but
+# nothing is enforced cluster-wide, so any pod is admitted and workload
+# authors are responsible for their own pod security, not the platform.
+# This is a deliberate, opt-in relaxation of Talos's own stricter
+# baseline default (see SECURITY.md) -- not a bug workaround like the
+# quiet-warnings patch above. Because `enforce` itself is now
+# `privileged`, `kube-system`'s exemption (Talos's own default,
+# untouched by either patch) is moot -- everything is already exempt in
+# every namespace.
+PODSECURITY_PERMISSIVE_PATCH: dict = {
+    "cluster": {
+        "apiServer": {
+            "admissionControl": [
+                {
+                    "name": "PodSecurity",
+                    "configuration": {
+                        "apiVersion": "pod-security.admission.config.k8s.io/v1alpha1",
+                        "kind": "PodSecurityConfiguration",
+                        "defaults": {
+                            "enforce": "privileged",
+                            "audit": "privileged",
+                            "warn": "privileged",
+                        },
+                    },
+                }
+            ]
+        }
+    }
+}
+
 
 def gen_config(
     cluster_name: str,
@@ -85,6 +121,7 @@ def gen_config(
     talos_version: str,
     allow_scheduling_on_control_plane: bool = False,
     coredns_image: str | None = None,
+    permissive: bool = False,
 ) -> None:
     """Writes controlplane.yaml, worker.yaml, talosconfig into output_dir.
 
@@ -111,16 +148,22 @@ def gen_config(
     CoreDNS deployment uses -- addons.yaml's `coredns.image` is the only
     thing that sets this.
 
-    Every lab also always applies PODSECURITY_QUIET_WARNINGS_PATCH, lowering
-    the PodSecurity admission plugin's warn/audit levels to match its
-    enforce level (baseline) -- see that constant's comment for why.
-    Enforcement itself is unchanged (still baseline, kube-system still the
-    only exemption), so this only silences noisy warnings on pods that
-    already pass; it does not relax what's actually admitted.
+    Every lab always applies one of two PodSecurity admission-control
+    patches to cluster.apiServer. By default (permissive=False),
+    PODSECURITY_QUIET_WARNINGS_PATCH lowers the PodSecurity admission
+    plugin's warn/audit levels to match its enforce level (baseline) --
+    see that constant's comment for why. Enforcement itself is unchanged
+    (still baseline, kube-system still the only exemption), so this only
+    silences noisy warnings on pods that already pass; it does not relax
+    what's actually admitted. When permissive=True, PODSECURITY_PERMISSIVE_PATCH
+    is applied instead, dropping enforce itself to "privileged" (GKE
+    Standard's default posture: PSA present but nothing rejected
+    cluster-wide) -- see that constant's comment and SECURITY.md.
     """
     output_dir.mkdir(parents=True, exist_ok=True)
     cluster_patch: dict = {"cluster": {"network": {"cni": {"name": "none"}}}}
-    cluster_patch["cluster"]["apiServer"] = PODSECURITY_QUIET_WARNINGS_PATCH["cluster"]["apiServer"]
+    psa_patch = PODSECURITY_PERMISSIVE_PATCH if permissive else PODSECURITY_QUIET_WARNINGS_PATCH
+    cluster_patch["cluster"]["apiServer"] = psa_patch["cluster"]["apiServer"]
     if coredns_image:
         cluster_patch["cluster"]["coreDNS"] = {"image": coredns_image}
     args = [

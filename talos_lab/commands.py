@@ -70,6 +70,32 @@ def _prompt_addons_enabled(
     return Confirm.ask("Install the standard add-on complement?", default=True)
 
 
+def _prompt_permissive(assume_yes: bool) -> bool:
+    """Only called once, at first registration, and only when --permissive
+    wasn't already passed explicitly (that skips this prompt and implies
+    yes -- see create_lab). Resumed `create` calls read the answer back
+    from the registry (permissive) instead of re-prompting, same pattern
+    as _prompt_addons_enabled above.
+
+    Default is "no": talos-lab's baseline posture (Talos's own stricter
+    default, see SECURITY.md) is enforced unless the user opts out, not
+    the other way around. --yes alone (without --permissive) answers "no"
+    here, same as it answers "yes" for _prompt_addons_enabled -- --yes
+    means "don't ask, take the safe/sane default" for every prompt, and
+    the safe default for security posture is the stricter one.
+    """
+    if assume_yes:
+        return False
+    console.print(
+        "[yellow]note:[/yellow] permissive mode sets this cluster's Pod Security Admission "
+        "to \"privileged\" cluster-wide (GKE Standard's default posture) -- any pod is "
+        "admitted, and workloads you deploy are YOUR responsibility to secure, not the "
+        "platform's. Talos's own default (baseline enforcement) is stricter than this and "
+        "is what you get by declining."
+    )
+    return Confirm.ask("Install this cluster in permissive PSA mode?", default=False)
+
+
 def create_lab(
     name: str,
     worker_count: int | None,
@@ -77,6 +103,7 @@ def create_lab(
     worker_profile_name: str | None = None,
     single_node: bool = False,
     assume_yes: bool = False,
+    permissive: bool = False,
 ) -> None:
     paths.ensure_root_dirs()
 
@@ -107,6 +134,10 @@ def create_lab(
         addons_enabled = _prompt_addons_enabled(
             cp_profile_name, worker_profile_name, single_node, assume_yes
         )
+        # --permissive on the command line skips the prompt and implies
+        # yes, same as an explicit --cp-profile skips _prompt_for_profile
+        # above -- only prompt when the choice wasn't already made.
+        permissive_enabled = True if permissive else _prompt_permissive(assume_yes)
         # Snapshot the version + resolved VM specs at creation time, not
         # just the profile/version names -- both can be edited or repinned
         # later, and this lab should keep reporting what it was actually
@@ -147,6 +178,7 @@ def create_lab(
                 "control_plane_mac": control_plane_mac,
                 "worker_macs": worker_macs,
                 "addons_enabled": addons_enabled,
+                "permissive": permissive_enabled,
             },
         )
         state.save_lab_state(name, dict(state.DEFAULT_LAB_STATE))
@@ -181,6 +213,12 @@ def create_lab(
         # default to installing the standard complement, same as the
         # prompt's own default.
         addons_enabled = meta.get("addons_enabled", True)
+        # Missing on labs registered before --permissive existed -- default
+        # to Talos's own stricter baseline enforcement (False), same
+        # "unsafe to retroactively relax" reasoning as cni_installed's
+        # grandfathering in STATE MODEL: an old lab should keep whatever
+        # posture it was actually created with, not silently loosen.
+        permissive_enabled = meta.get("permissive", False)
 
     paths.ensure_lab_dirs(name)
     lab_state = state.load_lab_state(name)
@@ -255,6 +293,7 @@ def create_lab(
             talos_version,
             allow_scheduling_on_control_plane=single_node,
             coredns_image=addons.coredns_image_override(),
+            permissive=permissive_enabled,
         )
 
         talosctl.apply_config(
@@ -391,9 +430,11 @@ def show_status(name: str) -> None:
 
     topology = "single-node" if meta.get("single_node") else f"1 control-plane + {meta['worker_count']} worker(s)"
     addons_note = "enabled" if meta.get("addons_enabled", True) else "declined at creation"
+    psa_note = "permissive" if meta.get("permissive", False) else "enforced (baseline)"
     console.print(
         f"[bold]{name}[/bold]  talos={meta.get('talos_version', 'unknown')}  "
-        f"topology={topology}  network={meta.get('network_name', '?')}  add-ons={addons_note}"
+        f"topology={topology}  network={meta.get('network_name', '?')}  add-ons={addons_note}  "
+        f"psa={psa_note}"
     )
 
     console.print("\n[bold]Bootstrap stage:[/bold]")

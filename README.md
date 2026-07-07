@@ -662,6 +662,49 @@ kubectl label namespace <ns> \
   pod-security.kubernetes.io/warn=privileged
 ```
 
+**Cluster-wide opt-out:** if you don't want baseline enforcement at all
+for a given lab, pass `--permissive` to `create`:
+
+```bash
+taloslab create demo 2 --permissive
+```
+
+This sets the cluster's PSA default to `privileged` everywhere — actually
+matching GKE Standard's real default (nothing enforced, any pod admitted,
+you own workload security) instead of Talos's stricter one. If you omit
+the flag, `create` prompts once at first creation (default **No** —
+Enter keeps Talos's stricter baseline):
+
+```
+note: permissive mode sets this cluster's Pod Security Admission to
+"privileged" cluster-wide (GKE Standard's default posture) -- any pod is
+admitted, and workloads you deploy are YOUR responsibility to secure, not
+the platform's. Talos's own default (baseline enforcement) is stricter
+than this and is what you get by declining.
+Install this cluster in permissive PSA mode? [y/n] (n):
+```
+
+Like `--single-node` and the add-on opt-out, this is a one-time decision
+made at `create` time, snapshotted per-lab, and reused on a resumed
+`create` — it won't re-prompt or silently change your answer. `--yes`
+without `--permissive` answers **No** here (unlike the add-ons prompt,
+where `--yes` answers "install" — for a security-posture choice, the sane
+default under `--yes` is the stricter one, not the looser one).
+`taloslab status <lab_name>` shows `psa=permissive` or
+`psa=enforced (baseline)` so you can tell which mode a lab is running in
+without guessing. There's no way to flip an existing lab between modes —
+recreate it if you need to change this later.
+
+This is a real reduction in cluster safety net, not just a convenience
+toggle: with `--permissive`, nothing stops a workload (intentional or
+not — a misconfigured manifest, a Helm chart's default values, a
+compromised image) from using `hostNetwork`, mounting the host
+filesystem via `hostPath`, or running privileged, in *any* namespace, not
+just ones you've deliberately opted in. Use it for throwaway/exploratory
+labs where PSA friction isn't worth it, not just to make one stubborn
+workload's rejection go away (a namespace label, above, is the narrower
+fix for that).
+
 ---
 
 ## 7. Kubeconfig behavior

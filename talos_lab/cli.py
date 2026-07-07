@@ -61,9 +61,19 @@ def create(
     yes: bool = typer.Option(
         False, "--yes", "-y", help="Skip the confirmation prompt if another lab is already running"
     ),
+    permissive: bool = typer.Option(
+        False,
+        "--permissive",
+        help="Install with GKE-style permissive Pod Security Admission (cluster-wide "
+        "'privileged' -- any pod is admitted, you own workload security). Skips the "
+        "permissive-mode prompt and answers yes. Default posture (omit this flag) is "
+        "Talos's own stricter baseline enforcement.",
+    ),
 ) -> None:
     """Create (or resume) a lab: VMs, network, Talos bootstrap, kubeconfig."""
-    commands.create_lab(name, worker_count, control_plane_profile, worker_profile, single_node, yes)
+    commands.create_lab(
+        name, worker_count, control_plane_profile, worker_profile, single_node, yes, permissive
+    )
 
 
 @app.command(name="list")
