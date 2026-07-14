@@ -806,6 +806,17 @@ adding it. Re-check with `virsh -c qemu:///system list`.
   image and recreate the lab from scratch; there is no equivalent of
   `talosctl upgrade` wired in. A `taloslab upgrade` command is a planned
   future addition, not yet designed or implemented.
+- **No independent Kubernetes version tracking or upgrade.** talos-lab has
+  no `kubernetes_version` concept at all; `talosctl gen config` is called
+  without `--kubernetes-version`, so each lab simply runs whatever
+  Kubernetes release is bundled with the Talos version it was created
+  from. There's no way to bump Kubernetes on an already-created lab
+  separately from Talos, and recreating the lab against a newer Talos
+  image is the only way to move to a newer Kubernetes version too. Note
+  this would remain true even once `taloslab upgrade` (above) exists: a
+  real Talos node upgrade deliberately does not upgrade Kubernetes
+  automatically either, so Kubernetes version management would still be
+  a separate, unsolved problem on top of it.
 
 ---
 
