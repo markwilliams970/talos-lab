@@ -799,6 +799,13 @@ adding it. Re-check with `virsh -c qemu:///system list`.
 - Memory pressure protection (section 4a) only checks whether another
   lab's VMs are running, not actual host memory usage or whether the
   profiles chosen would actually fit; it's a nudge, not a capacity check.
+- **No in-place Talos upgrade.** talos-lab has no verb for upgrading the
+  Talos OS version on a lab's already-provisioned VMs; `talos_version` is
+  set once at `create` time (section 4b) and nothing mutates it after.
+  To move a lab to a newer Talos version today, `taloslab get` the new
+  image and recreate the lab from scratch; there is no equivalent of
+  `talosctl upgrade` wired in. A `taloslab upgrade` command is a planned
+  future addition, not yet designed or implemented.
 
 ---
 
